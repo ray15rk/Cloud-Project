@@ -15,4 +15,6 @@ response = requests.post(
 print(response.json())
 "@ | python
 
-TODO NEXT: Need to chain the watchdog and sandbox together and call endpoint process if everything passes
+TODO NEXT: 
+**The scripts testing assumes all is in python for now, need to change once all is done
+Need to chain the watchdog and sandbox together and call endpoint process if everything passes
