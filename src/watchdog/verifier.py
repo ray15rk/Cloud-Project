@@ -2,6 +2,7 @@ import hmac
 import hashlib
 import time
 from dataclasses import dataclass, field
+from src.watchdog.sign import build_mac_input
 
 # Define a custom exception for verification errors: 
 # Raising specifc errors allow checking for specific error types in the calling code 
@@ -34,28 +35,27 @@ class NonceStore:
         return True  # Nonce is new and has been recorded
 
 # Verifies an incoming payload exactly as it was signed, using the provided secret and nonce store
-# Return the payload only if its verified successfully, otherwise raises a VerificationError
+# Returns the payload only if verified successfully, otherwise raises a VerificationError
 # Only checks the payload, does not execute it
-def verify_payload(message: dict, secret: bytes, nonce_store: NonceStore) -> bool:
+def verify_payload(message: dict, secret: bytes, nonce_store: NonceStore) -> bytes:
     payload = message["payload"]
     nonce = message["nonce"]
+    timestamp = message["timestamp"]
     tag = message["tag"]
 
-    # Check if its a replay attack first before touching HMAC 
-    # If HMAC is checked first but it has failed, we still want to have a clear error message
-    # Checking the replay attack fist means a valid message is caught for the right reason rather than just failing the HMAC check
-    if not nonce_store.check_and_record(nonce):
-        raise VerificationError("Replay Attack Detected")
-
-    # Recompute the HMAC-SHA256 tag using the secret key and the concatenated input (payload + nonce)
-    # Ensures that if sender and receiver miss on any of the three components (payload, nonce, or secret), the verification will fail
-    # Suspect a mismatch here before suspecting a replay attack
-    mac_input = payload + nonce.encode("utf-8")
-    expected_tag = hmac.new(secret, mac_input, hashlib.sha256).hexdigest()
-
-    # Standard comparison string not used to prevent timing attacks, which could allow an attacker to guess the correct tag byte by byte
+    # 1. Authenticity first: recompute the tag over payload + nonce + timestamp
+    # Nothing touches the nonce store until we know the message came from someone holding the key
+    expected_tag = hmac.new(secret, build_mac_input(payload, nonce, timestamp), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expected_tag, tag):
         raise VerificationError("HMAC Verification Failed")
 
-    # Both check passed
+    # 2. Freshness: reject anything signed longer ago than the nonce store remembers
+    # The timestamp is covered by the HMAC, so an attacker cannot edit it to look fresh
+    if abs(time.time() - timestamp) > nonce_store.ttl_seconds:
+        raise VerificationError("Message Expired")
+
+    # 3. Only now consume the nonce
+    if not nonce_store.check_and_record(nonce):
+        raise VerificationError("Replay Attack Detected")
+
     return payload

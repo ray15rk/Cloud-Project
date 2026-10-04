@@ -3,8 +3,10 @@
 
 # ASSUMPTION FOR NOW: Payload is a python script, need to handle more languagues later
 
+import os
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
 
 def prepare_script_file(payload: bytes) -> Path:
@@ -15,6 +17,7 @@ def prepare_script_file(payload: bytes) -> Path:
     tmp = tempfile.NamedTemporaryFile(delete=False, mode='wb', suffix='.py')
     tmp.write(payload)
     tmp.close()
+    os.chmod(tmp.name, 0o644)  # Readable by the unprivileged sandbox user, writable only by owner
     return Path(tmp.name)
 
 def sandbox_execute(script_path: Path, cpu_limit: str = "0.5", memory_limit: str = "128m", timeout_seconds: int = 10) -> dict:
@@ -22,12 +25,25 @@ def sandbox_execute(script_path: Path, cpu_limit: str = "0.5", memory_limit: str
     # Docker's --cpus flag takes a plain number of cores, while Kubernetes uses a millicore format
     # Need to know the conversion so it is consistent for YAML files later
 
+    # Unique name per run so we can find and kill this exact container if it times out
+    container_name = f"sandbox-{uuid.uuid4().hex[:12]}"
+
     docker_cmd = [
         "docker", 
         "run", 
         "--rm", # Remove container when it exists else other dry run leaves a dead container 
+        "--name", container_name,
+        "--label", "cloudproject.sandbox=1",  # Lets tests and cleanup scripts find every sandbox container
         f"--memory={memory_limit}", 
         f"--cpus={cpu_limit}", 
+
+        # Hardening, matches Section 5.2 of the proposal
+        "--network", "none",                       # No network access during the dry run
+        "--user", "65534:65534",                   # Run as unprivileged "nobody", not root
+        "--read-only",                             # Container filesystem cannot be modified
+        "--cap-drop", "ALL",                       # Remove all special Linux privileges
+        "--security-opt", "no-new-privileges",     # Block regaining privileges via setuid tricks
+        "--pids-limit", "64",                      # Cap process count, stops fork bombs
 
         # Mount script into the container with read only
         # Sandbox can process read but never modify it to prevent script tempering mid run
@@ -42,6 +58,9 @@ def sandbox_execute(script_path: Path, cpu_limit: str = "0.5", memory_limit: str
         # Timeout used to terminate a CPU throttled intinite loop script, otherwise it will run forever and never return
         result = subprocess.run(docker_cmd, capture_output=True, text=True, timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
+        # The timeout only killed the docker CLI client, the container is still running inside the Docker engine
+        # Tell the engine to kill it; --rm then deletes it automatically
+        subprocess.run(["docker", "kill", container_name], capture_output=True)
         return {
             "status": "timeout",
             "detail": f"Script did not finish within {timeout_seconds}s, likely due to CPU bound infinite loop"

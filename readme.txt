@@ -1,6 +1,8 @@
 Install docker desktop
 pip install -r requirements.txt
-Run test file:  python -m pytest tests/ -v
+Run test file (from the Cloud-Project folder):      python -m pytest src/tests -v
+Watchdog tests only (no Docker needed):             python -m pytest src/tests -v -m "not docker"
+Before the first run, download the sandbox image:   docker pull python:3.11-slim
 
 Endpoint test:
 python src/endpoint/endpoint_app.py

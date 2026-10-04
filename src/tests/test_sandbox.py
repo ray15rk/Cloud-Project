@@ -29,3 +29,33 @@ def test_infinite_loop_timeout():
 """
     result = dry_run(script, timeout_seconds=2)  # Set a short timeout for testing
     assert result["status"] == "timeout"
+
+def test_timeout_leaves_no_container():
+    # After a timeout, the infinite loop container must actually be gone, not just abandoned
+    import subprocess, time
+    dry_run(b"while True:\n    pass\n", timeout_seconds=2)
+    time.sleep(1)  # Give Docker a moment to finish removing the killed container
+    running = subprocess.run(
+        ["docker", "ps", "-q", "--filter", "label=cloudproject.sandbox=1"],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    assert running == "", f"Leftover sandbox containers: {running}"
+
+def test_no_network_access():
+    # A payload trying to reach the internet during its dry run must fail
+    script = b"""import socket
+socket.create_connection(("1.1.1.1", 53), timeout=3)
+"""
+    result = dry_run(script)
+    assert result["status"] == "error"
+
+def test_runs_as_non_root():
+    # The sandbox must not run as root (uid 0)
+    result = dry_run(b"import os; print(os.getuid())")
+    assert result["status"] == "OK"
+    assert result["stdout"].strip() != "0"
+
+def test_cannot_write_filesystem():
+    # The container filesystem is read-only, so writing a file must fail
+    result = dry_run(b"open('/tmp/evil.txt', 'w').write('x')")
+    assert result["status"] == "error"

@@ -1,3 +1,4 @@
+import time
 import pytest
 from src.watchdog.sign import sign_payload
 from src.watchdog.verifier import verify_payload, VerificationError, NonceStore
@@ -52,3 +53,30 @@ def test_wrong_secret():
     # Expect a verification failure due to HMAC mismatch
     with pytest.raises(VerificationError, match = "HMAC Verification Failed"):
         verify_payload(message, wrong_secret, NonceStore())
+
+def test_tampered_timestamp():
+    # Attacker changes the timestamp to make an old message look fresh
+    # Timestamp is covered by the HMAC, so the edit must break the tag
+    message = sign_payload(b"This is a test payload", SECRET_KEY)
+    message["timestamp"] += 30
+    with pytest.raises(VerificationError, match = "HMAC Verification Failed"):
+        verify_payload(message, SECRET_KEY, NonceStore())
+
+def test_expired_message():
+    # Genuine message signed 2 minutes ago, store only remembers 60s, so it must be rejected
+    old_time = int(time.time()) - 120
+    message = sign_payload(b"This is a test payload", SECRET_KEY, timestamp = old_time)
+    with pytest.raises(VerificationError, match = "Message Expired"):
+        verify_payload(message, SECRET_KEY, NonceStore(ttl_seconds = 60))
+
+def test_forged_message_does_not_burn_nonce():
+    # Attacker copies a real nonce onto junk and sends it first
+    # The junk must fail without recording the nonce, so the genuine message still gets through
+    store = NonceStore()
+    real = sign_payload(b"This is a test payload", SECRET_KEY)
+    forged = {"payload": b"junk", "nonce": real["nonce"], "timestamp": real["timestamp"], "tag": "00"}
+
+    with pytest.raises(VerificationError, match = "HMAC Verification Failed"):
+        verify_payload(forged, SECRET_KEY, store)
+
+    assert verify_payload(real, SECRET_KEY, store) == real["payload"]
