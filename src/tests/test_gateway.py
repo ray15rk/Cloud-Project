@@ -5,9 +5,9 @@ import pytest
 import src.gateway.gateway_app as gw
 from src.watchdog.sign import sign_payload
 from src.watchdog.verifier import NonceStore
+from src.resource_manager.resource_manager import ResourceManager
 
 SECRET = b"test-secret"
-
 
 class FakeResponse:
     def raise_for_status(self):
@@ -21,9 +21,14 @@ def client(monkeypatch):
     # Fresh secret and nonce store for every test, and record what the gateway does
     monkeypatch.setattr(gw, "SHARED_SECRET", SECRET)
     monkeypatch.setattr(gw, "nonce_store", NonceStore())
+
+    # Fresh resource manager with generous budget
+    # Tests check HMAC/repay/forwarding logic instead of capacity behaviour, so that need enough room that admission always succeeds 
+    # Only dont successed if test deliberatyl serts right budget itself
+    monkeypatch.setattr(gw, "resource_manager", ResourceManager(total_memory_mb=10_000)) 
     calls = {"forwarded": [], "notified": [], "dry_run": "OK"}
 
-    def fake_dry_run(payload):
+    def fake_dry_run(payload, memory_limit=None):
         status = calls["dry_run"]
         return {"status": status, "stdout": "ok"} if status == "OK" else {"status": status, "detail": "fake"}
 
@@ -115,4 +120,15 @@ def test_sandbox_crash_fails_closed(client, monkeypatch):
     monkeypatch.setattr(gw, "dry_run", broken_dry_run)
     resp = c.post("/submit", json=signed_body())
     assert resp.status_code == 503
+    assert resp.get_json()["stage"] == "dry_run"
     assert calls["forwarded"] == []
+
+def test_capacity_exceeded_rejected(client, monkeypatch):
+    c, calls = client
+    monkeypatch.setattr(gw, "resource_manager", ResourceManager(total_memory_mb=1))
+    resp = c.post("/submit", json=signed_body())
+
+    assert resp.status_code == 503
+    assert resp.get_json()["stage"] == "capacity"
+    assert calls["forwarded"] == [] # Never reach endpoint
+    assert calls["notified"] == ["capacity"]

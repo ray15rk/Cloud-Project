@@ -80,3 +80,14 @@ def test_forged_message_does_not_burn_nonce():
         verify_payload(forged, SECRET_KEY, store)
 
     assert verify_payload(real, SECRET_KEY, store) == real["payload"]
+
+def test_concurrent_replay():
+    # Fire a few simultaneous calls with the same noonce at once and confirm if exactly one is accepted
+    import concurrent.futures
+    store = NonceStore()
+    nonce = "race condition nonce"
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
+        results = list(pool.map(lambda _: store.check_and_record(nonce), range(20)))
+
+    assert results.count(True) == 1

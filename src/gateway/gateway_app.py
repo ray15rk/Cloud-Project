@@ -13,6 +13,7 @@ from flask import Flask, jsonify, request
  
 from src.sandbox.sandbox import dry_run
 from src.watchdog.verifier import NonceStore, VerificationError, verify_payload
+from src.resource_manager.resource_manager import resource_manager
 
 load_dotenv()  # Reads SHARED_SECRET etc.
 
@@ -23,7 +24,6 @@ NOTIFY_URL = os.environ.get("NOTIFY_URL", "")  # Central server's failure inbox
 app = Flask(__name__)
  
 # One store shared by every request, so a nonce seen on one request is remembered for the next
-# NOTE: Flask handles requests on multiple threads; so the store needs a lock when fowarding to endpoint (might need to do)
 nonce_store = NonceStore()
 
 # Lightweight failure notification so a dropped payload is not silent
@@ -61,21 +61,35 @@ def process_submission(body: dict) -> tuple[dict, int]:
     t = time.perf_counter()
     try:
         payload = verify_payload(message, SHARED_SECRET, nonce_store)
+        
     except VerificationError as e:
         notify_failure("verify", str(e), nonce)
         return {"delivered": False, "stage": "verify", "reason": str(e)}, 401
     timings["verify_ms"] = round((time.perf_counter() - t) * 1000, 2)
+
+    # Stage 2a: capacity check that gates the dry run specifically, not the whole request
+    # NOTE: If the local host has no room, failed closed: EKS bursting not setup, drop it first rather than overcommit
+    DRY_RUN_MEMORY_LIMIT = "128m"
+    if not resource_manager.try_admit(DRY_RUN_MEMORY_LIMIT):
+        notify_failure("capacity", "local host at capacity", nonce)
+        return {"delivered": False, "stage":"capacity", "reason":"local host at capacity"}, 503
  
-    # Stage 2: resource-bounded dry run. Since this is expensive, it only runs for legit payloads.
+    # Stage 2b: resource-bounded dry run. Since this is expensive, it only runs for legit payloads.
     t = time.perf_counter()
     try:
-        result = dry_run(payload)
+        result = dry_run(payload, memory_limit=DRY_RUN_MEMORY_LIMIT)
+
     except Exception as e:
-        # Fail closed: if the sandbox itself is broken (e.g. Docker not running), the payload
-        # is dropped, never forwarded untested
+        # Fail closed: if the sandbox itself is broken (e.g. Docker not running), the payload is dropped, never forwarded untested
+        print(f"[gateway] dry_run failed unexpectedly: {e}")
         notify_failure("dry_run", f"sandbox unavailable: {e}", nonce)
         return {"delivered": False, "stage": "dry_run", "reason": "sandbox unavailable"}, 503
+    
+    finally:
+        # Container is gone by the time dry_run() returns = success, failure or exception. Release slot unconditioanlly
+        resource_manager.release(DRY_RUN_MEMORY_LIMIT)
     timings["dry_run_ms"] = round((time.perf_counter() - t) * 1000, 2)
+
     if result["status"] != "OK":
         reason = f'{result["status"]}: {result.get("detail", "")}'.strip(": ")
         notify_failure("dry_run", reason, nonce)
