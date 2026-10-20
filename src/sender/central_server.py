@@ -4,6 +4,10 @@
 from flask import Flask, request
  
 app = Flask(__name__)
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "service": "central"}
  
 @app.route("/notify", methods=["POST"])
 def notify():
@@ -14,4 +18,3 @@ def notify():
  
 if __name__ == "__main__":
     app.run(port=9000)
- 

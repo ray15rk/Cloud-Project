@@ -1,5 +1,50 @@
 # Cloud Computing Project
 
+## DASHBOARD
+
+Start Docker Desktop. Stop any old gateway, endpoint, and central server processes
+with Ctrl+C, then run this single command from the project directory:
+
+```powershell
+.\.venv\Scripts\python.exe -m src.dashboard
+```
+
+Open **http://127.0.0.1:8000**. This starts all three local services together.
+The dashboard supports Python uploads and editing, sample scripts, signed,
+tampered, and replayed submissions, execution traces, service health, concurrent
+capacity probes, activity search/filtering, JSON details, and CSV export.
+
+Run `docker build -t cloudproject-sandbox:dev docker/sandbox` first if the image
+has not been built. Follow SETUP below if dependencies or `.env` are missing.
+Ctrl+C stops the dashboard's three services. The original four-terminal workflow
+and sender CLI still work; gateway submissions also appear in dashboard history.
+
+The operator dashboard is restricted to localhost. Signing happens on the server;
+the shared HMAC secret is never sent to the browser. Only run scripts you trust,
+since a successful dry run forwards the original script for real endpoint
+execution. EKS is visibly disconnected; no cloud execution is simulated.
+
+Activity metadata and bounded endpoint output are saved in
+`.data/activity.sqlite3` (gitignored). The latest 100 records are displayed and
+exportable; up to 2,000 records are retained. Editor drafts stay in this browser's
+local storage. Scripts and HMAC keys are not stored in the activity database.
+
+### Dashboard verification
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest src/tests -v -p no:cacheprovider
+```
+
+For the optional real browser + Docker checks (temporary database, separate ports):
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m playwright install chromium
+.\.venv\Scripts\python.exe -m scripts.check_dashboard
+```
+
+Screenshots are saved in `artifacts/` (gitignored).
+
 ## SETUP
 1. Install Python 3.11+ and Docker Desktop.
  
@@ -10,18 +55,54 @@
  
 3. pip install -r requirements.txt
  
-4. Create a .env where .env.example is, copy contents, and set a real secret:
+4. Copy env.example to .env and set a real secret:
+    Copy-Item env.example .env          (PowerShell; only if .env does not exist)
     python -c "import secrets; print(secrets.token_hex(32))"
     Paste the result as SHARED_SECRET. .env is gitignored - never commit it.
  
-5. Pre-pull the sandbox image, otherwise the first dry run is counted as a timeout:
-    docker pull python:3.11-slim
+5. Start Docker Desktop with the Linux container engine, then build the sandbox image:
+    docker build -t cloudproject-sandbox:dev docker/sandbox
+
+   Build before starting the gateway. Dry runs use --pull=never so downloading an
+   image cannot consume a payload's execution deadline. Rebuild after changing
+   the Dockerfile. SANDBOX_IMAGE in .env selects the image; the default is
+   cloudproject-sandbox:dev.
  
 All commands must be run from the Cloud-Project folder.
 All of this project's own modules (src.*) must be run with `python -m`, not a direct
 script path (e.g. `python -m src.gateway.gateway_app`, not `python src/gateway/gateway_app.py`) -
 otherwise absolute imports like `from src.sandbox.sandbox import dry_run` fail with
 `ModuleNotFoundError`.
+
+## SANDBOX IMAGE
+
+The image in docker/sandbox/Dockerfile contains the Python 3.11 runtime and runs
+as UID/GID 65534. Its default command executes /sandbox/script.py. The gateway
+mounts each verified payload there read-only; payloads and shared secrets are
+not included in the image. The build context is limited to docker/sandbox.
+
+The local runner still applies memory and CPU limits, network isolation, a
+read-only filesystem, dropped capabilities, no-new-privileges, a PID limit,
+and a 10-second execution deadline. These are runtime settings, not protections
+that a Dockerfile alone can enforce.
+
+After building, check the image and then run the existing tests:
+
+```powershell
+docker image inspect cloudproject-sandbox:dev --format '{{.Config.User}}'
+python -m pytest src/tests -v
+docker ps -a --filter label=cloudproject.sandbox=1
+```
+
+The image user should be 65534:65534, tests should pass, and no sandbox containers
+should remain. If python opens the Microsoft Store, use py to create the virtual
+environment, then use .\.venv\Scripts\python.exe for subsequent Python commands.
+
+For the next milestone, tag and push this same image to ECR, then use that ECR
+image URI in a hardened Kubernetes Job. The Job must reproduce the runtime
+protections, disable payload retries, and clean up after completion. EKS routing
+and IAM retry handling remain separate implementation work; building this image
+does not enable cloud bursting.
 
 ## TESTS
 All tests (Docker Desktop must be running):   python -m pytest src/tests -v
@@ -88,6 +169,7 @@ the status code AND the "stage"/"reason" fields match what's expected above, not
 that it didn't crash.
 
 ## NOTES
+- For the next project phase, follow [AWS Learner Lab setup](docs/aws-setup.md).
 - EKS cloud-burst path — resource manager currently fails closed (drops the
   payload, HTTP 503 stage "capacity") rather than bursting, since no cluster
   exists yet. Needs, in order: (1) EKS + ECR provisioning and moving the

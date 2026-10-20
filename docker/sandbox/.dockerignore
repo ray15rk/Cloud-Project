@@ -1,0 +1,4 @@
+# This image needs only its Dockerfile, not project files or credentials.
+**
+!Dockerfile
+!.dockerignore

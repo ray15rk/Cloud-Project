@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="dashboard-token" content="{{ dashboard_token }}">
+  <meta name="description" content="Relay — a local control room for verified, isolated mobile-code delivery.">
+  <title>Relay · Secure code delivery</title>
+  <link rel="icon" href="{{ url_for('dashboard.static', filename='mark.svg') }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ url_for('dashboard.static', filename='dashboard.css') }}">
+  <script src="{{ url_for('dashboard.static', filename='dashboard.js') }}" defer></script>
+</head>
+<body data-view="overview">
+<svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+ <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+ <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-15-2 18"/></symbol>
+ <symbol id="i-activity" viewBox="0 0 24 24"><path d="M2 12h5l3-8 4 16 3-8h5"/></symbol>
+ <symbol id="i-server" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M16 6.5h2m-2 11h2"/></symbol>
+ <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+ <symbol id="i-shield" viewBox="0 0 24 24"><path d="m12 2 9 4v6c0 5-9 10-9 10S3 17 3 12V6l9-4Z"/><path d="m8 12 3 3 5-6"/></symbol>
+ <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+ <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+ <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 15v5h16v-5"/></symbol>
+ <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v13m-5-5 5 5 5-5M4 17v4h16v-4"/></symbol>
+ <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9m-12 9c0 5 6 5 6 0"/></symbol>
+ <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6"/></symbol>
+ <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+ <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M6 18a5 5 0 1 1 0-10 7 7 0 0 1 13 1 4.5 4.5 0 0 1 0 9Z"/></symbol>
+ <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M5 8a8 8 0 0 1 13-3l2 3M4 16l2 3a8 8 0 0 0 13-3"/></symbol>
+ <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+</svg>
+<a class="skip-link" href="#main">Skip to content</a>
+<aside class="sidebar" id="sidebar">
+  <a href="#overview" class="brand" aria-label="Relay home"><span class="brand-mark">r<span>↗</span></span><span>relay<span class="brand-dot">.</span></span></a>
+  <div class="workspace-label">WORKSPACE <span>01</span></div>
+  <nav aria-label="Main navigation">
+    <button class="nav-item active" data-view="overview" aria-current="page"><svg class="icon"><use href="#i-grid"/></svg>Overview</button>
+    <button class="nav-item" data-view="workbench"><svg class="icon"><use href="#i-code"/></svg>Workbench<span class="nav-key">⌘</span></button>
+    <button class="nav-item" data-view="activity"><svg class="icon"><use href="#i-activity"/></svg>Activity<span class="nav-count" id="activity-count">0</span></button>
+    <button class="nav-item" data-view="system"><svg class="icon"><use href="#i-server"/></svg>System status</button>
+  </nav>
+  <div class="sidebar-note"><span class="tiny-dot"></span> LOCAL ENVIRONMENT<p>Built to verify.<br>Designed to protect.</p><svg class="sidebar-shield"><use href="#i-shield"/></svg></div>
+  <div class="sidebar-bottom">
+    <div class="resource-heading"><span>Local memory</span><span id="memory-percent">0%</span></div>
+    <div class="resource-track"><span id="memory-fill"></span></div>
+    <div class="resource-caption" id="memory-caption">Checking capacity…</div>
+    <button class="workspace-profile" data-view="system"><span class="profile-icon">22</span><span><strong>Group 22</strong><small>Cloud Computing Project</small></span><span class="profile-arrow">↗</span></button>
+  </div>
+</aside>
+<div class="app-shell">
+  <header class="topbar">
+    <div class="topbar-left"><button class="icon-button mobile-menu" id="menu-button" aria-label="Toggle navigation" aria-expanded="false"><svg class="icon"><use href="#i-menu"/></svg></button><span class="breadcrumb">Workspace <span>/</span> <strong id="breadcrumb-current">Overview</strong></span></div>
+    <div class="topbar-right"><span class="environment"><span class="tiny-dot"></span>Local workspace</span><span class="topbar-divider"></span><button class="icon-button" id="notification-button" aria-label="Show recent failures" aria-expanded="false"><svg class="icon"><use href="#i-bell"/></svg><span class="notification-dot" id="notification-dot" hidden></span></button><span class="avatar" aria-label="Group 22">G22</span></div>
+    <div class="notification-panel" id="notification-panel" hidden><h3>Recent failures</h3><div id="notification-content">No failures recorded.</div></div>
+  </header>
+  <main id="main" tabindex="-1">
+    <div class="page-heading"><div><div class="eyebrow">SECURE CODE DELIVERY</div><h1 id="page-title">Deployment overview</h1></div><div class="page-actions"><span id="today" class="today"></span><button class="button primary small" id="new-submission">New submission <span>+</span></button></div></div>
+    <div class="connection-banner" id="connection-banner" role="alert" hidden></div>
+
+    <section class="welcome overview-only" aria-label="Pipeline introduction">
+      <div class="welcome-copy"><span class="welcome-label"><span class="tiny-dot"></span> A LITTLE CERTAINTY IN EVERY HANDOFF</span><h2>Your code.<br>A safer journey<span>.</span></h2><p>Verify integrity. Isolate execution. Deliver with confidence.<br>Your local pipeline, all in one place.</p><button class="text-button" data-view="workbench">Open the workbench <svg class="icon"><use href="#i-arrow"/></svg></button></div>
+      <div class="journey-art" aria-hidden="true"><div class="orbit orbit-one"></div><div class="orbit orbit-two"></div><div class="journey-label">THE RELAY PIPELINE</div><div class="journey-nodes"><div class="journey-node"><div class="node-icon"><svg><use href="#i-shield"/></svg></div><strong>Verify</strong><small>Trust the source</small></div><span class="journey-link">······</span><div class="journey-node elevated"><div class="node-icon"><svg><use href="#i-code"/></svg></div><strong>Sandbox</strong><small>Contain the risk</small></div><span class="journey-link">······</span><div class="journey-node"><div class="node-icon"><svg><use href="#i-check"/></svg></div><strong>Deliver</strong><small>Move forward</small></div></div><div class="journey-footnote"><span class="tiny-dot"></span> Protected at every stage</div></div>
+    </section>
+
+    <section class="stats-grid overview-only" aria-label="Activity statistics">
+      <article class="stat-card"><div class="stat-top"><span>Total submissions</span><span class="stat-icon neutral"><svg class="icon"><use href="#i-activity"/></svg></span></div><div class="stat-value" id="stat-total">0</div><span class="stat-caption">Across retained activity</span></article>
+      <article class="stat-card"><div class="stat-top"><span>Delivered safely</span><span class="stat-icon green"><svg class="icon"><use href="#i-check"/></svg></span></div><div class="stat-value" id="stat-delivered">0</div><span class="stat-caption"><span class="mini-dot green-dot"></span> Verified and executed</span></article>
+      <article class="stat-card"><div class="stat-top"><span>Blocked / failed</span><span class="stat-icon amber"><svg class="icon"><use href="#i-shield"/></svg></span></div><div class="stat-value" id="stat-blocked">0</div><span class="stat-caption">Stopped or not delivered</span></article>
+      <article class="stat-card"><div class="stat-top"><span>Average processing</span><span class="stat-icon neutral"><svg class="icon"><use href="#i-clock"/></svg></span></div><div class="stat-value"><span id="stat-average">—</span><small id="stat-unit"></small></div><span class="stat-caption">End-to-end request time</span></article>
+    </section>
+
+    <section class="workbench-layout composer-section" aria-label="Submission workbench">
+      <article class="card composer-card">
+        <div class="card-heading"><div><div class="card-kicker">MAKE YOUR NEXT HANDOFF</div><h2>Submit a payload</h2></div><span class="language-tag"><span></span> Python 3.11</span></div>
+        <div class="editor-toolbar"><label class="filename-wrap"><svg class="icon"><use href="#i-code"/></svg><input id="filename" aria-label="Script file name" value="good.py" maxlength="120" spellcheck="false"></label><label class="upload-button" for="file-input"><svg class="icon"><use href="#i-upload"/></svg> Upload .py</label><input type="file" id="file-input" accept=".py,text/x-python" hidden></div>
+        <div class="code-editor" id="drop-zone"><div class="line-numbers" id="line-numbers" aria-hidden="true">1</div><textarea id="code-editor" aria-label="Python script" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off">print("config update applied")</textarea><div class="drop-hint">Drop a Python file here</div></div>
+        <div class="editor-footer"><span id="code-size">1 line · UTF-8</span><label class="example-select-label" for="example-select">Load sample <select id="example-select"><option value="">Choose a script</option></select></label></div>
+        <div class="submission-options"><span class="field-label" id="mode-label">Submission mode</span><div class="mode-group" role="group" aria-labelledby="mode-label"><button class="mode-option selected" data-mode="signed" aria-pressed="true">Signed payload</button><button class="mode-option" data-mode="tamper" aria-pressed="false">Tamper test</button><button class="mode-option" data-mode="replay" aria-pressed="false">Replay test</button></div><p class="mode-description" id="mode-description">Sign the original script and run it through the complete pipeline.</p></div>
+        <div class="submit-footer"><span><svg class="icon"><use href="#i-shield"/></svg> Server-side signing</span><button class="button primary" id="run-button"><svg class="icon"><use href="#i-arrow"/></svg><span>Run pipeline</span></button></div>
+      </article>
+
+      <article class="card execution-card" aria-live="polite" aria-atomic="false">
+        <div class="card-heading"><div><div class="card-kicker">FOLLOW THE JOURNEY</div><h2>Execution trace</h2></div><span class="badge neutral" id="trace-badge">Ready</span></div>
+        <div class="trace-intro" id="trace-intro">Your next submission will appear here.</div>
+        <ol class="pipeline-stages" id="pipeline-stages">
+          <li data-stage="verify"><span class="stage-symbol"><svg class="icon"><use href="#i-shield"/></svg></span><div><strong>Integrity verification</strong><small>HMAC signature &amp; replay check</small></div><span class="stage-time">—</span></li>
+          <li data-stage="capacity"><span class="stage-symbol"><svg class="icon"><use href="#i-server"/></svg></span><div><strong>Capacity routing</strong><small>Atomic local memory admission</small></div><span class="stage-time">—</span></li>
+          <li data-stage="dry_run"><span class="stage-symbol"><svg class="icon"><use href="#i-code"/></svg></span><div><strong>Isolated dry run</strong><small>128 MB memory · 10 s deadline</small></div><span class="stage-time">—</span></li>
+          <li data-stage="forward"><span class="stage-symbol"><svg class="icon"><use href="#i-check"/></svg></span><div><strong>Endpoint delivery</strong><small>Execute the original verified code</small></div><span class="stage-time">—</span></li>
+        </ol>
+        <div class="output-panel"><div class="output-heading"><span>OUTPUT &amp; RESULT</span><button class="text-button" id="copy-output">Copy</button></div><pre id="execution-output">Waiting for a payload.
+
+Good code starts with a trusted source.</pre></div>
+        <div class="trace-footer"><span class="tiny-dot"></span><span id="trace-footnote">Real results. No simulated delivery.</span></div>
+      </article>
+    </section>
+
+    <section class="card activity-section" aria-label="Submission history">
+      <div class="activity-heading"><div><div class="card-kicker">EVERY HANDOFF, ACCOUNTED FOR</div><h2>Recent activity <span class="count-pill" id="history-count">0</span></h2></div><button class="button secondary small" id="export-button"><svg class="icon"><use href="#i-download"/></svg>Export CSV</button></div>
+      <div class="activity-tools"><div class="filter-group" role="group" aria-label="Filter activity"><button class="filter-option selected" data-filter="all" aria-pressed="true">All submissions</button><button class="filter-option" data-filter="delivered" aria-pressed="false">Delivered</button><button class="filter-option" data-filter="blocked" aria-pressed="false">Blocked / failed</button></div><label class="search-wrap"><svg class="icon"><use href="#i-search"/></svg><input id="activity-search" type="search" placeholder="Search payloads…" aria-label="Search activity"></label></div>
+      <div class="table-scroll"><table><thead><tr><th>PAYLOAD</th><th>STATUS</th><th>MODE</th><th>DURATION</th><th>TIME</th><th><span class="sr-only">Details</span></th></tr></thead><tbody id="activity-body"></tbody></table></div>
+      <div class="empty-state" id="empty-state"><span class="empty-icon"><svg class="icon"><use href="#i-activity"/></svg></span><h3>A fresh start, a clear record.</h3><p>Run your first payload to see its journey here.</p><button class="text-button" data-view="workbench">Create a submission <span>↗</span></button></div>
+      <div class="table-footer"><span id="activity-summary">Showing 0 submissions</span><span>Latest 100 · up to 2,000 retained</span></div>
+    </section>
+
+    <section class="system-section" aria-label="System configuration">
+      <div class="system-grid"><article class="card"><div class="card-heading"><div><div class="card-kicker">YOUR LOCAL STACK</div><h2>Service health</h2></div><button class="icon-button" id="refresh-health" aria-label="Refresh service health"><svg class="icon"><use href="#i-refresh"/></svg></button></div><div id="service-list" class="service-list"><p>Checking services…</p></div></article><article class="card cloud-card"><span class="cloud-symbol"><svg class="icon"><use href="#i-cloud"/></svg></span><span class="badge amber">Not connected</span><h2>AWS EKS</h2><p>Local execution is available. Cloud bursting will be connected when your AWS environment is ready.</p><div class="cloud-note">When local capacity is full, submissions are safely rejected with HTTP 503.</div></article></div>
+      <article class="card guide-card"><div class="card-heading"><div><div class="card-kicker">PUT THE GUARDRAILS TO WORK</div><h2>Pipeline checks</h2></div><span class="badge neutral">Live tests</span></div><div class="test-grid"><div><span class="test-number">01</span><h3>Integrity &amp; replay</h3><p>Use Tamper test to invalidate a signature, or Replay test to send the same signed request twice.</p><button class="text-button" id="integrity-test">Try in workbench <span>↗</span></button></div><div><span class="test-number">02</span><h3>Resource isolation</h3><p>Load the infinite loop or memory exhaustion sample. The dry run should block endpoint delivery.</p><button class="text-button" id="resource-test">Load infinite loop <span>↗</span></button></div><div><span class="test-number">03</span><h3>Capacity admission</h3><p>Run concurrent, short-lived probes to exceed local slots. Results appear in your activity history.</p><button class="text-button" id="capacity-test">Run capacity test <span>↗</span></button></div></div></article>
+    </section>
+    <footer class="page-footer"><span><span class="footer-mark">r↗</span> A little more trust in every delivery.</span><span>Group 22 <span>·</span> Cloud &amp; Distributed Computing</span></footer>
+  </main>
+</div>
+<dialog id="detail-dialog" aria-labelledby="detail-title"><div class="dialog-heading"><div><div class="card-kicker">SUBMISSION DETAILS</div><h2 id="detail-title">Payload</h2></div><button class="icon-button" id="close-detail" aria-label="Close details"><svg class="icon"><use href="#i-close"/></svg></button></div><div id="detail-meta" class="detail-meta"></div><pre id="detail-response"></pre><div class="dialog-footer"><button class="button secondary" id="copy-detail">Copy JSON</button><button class="button primary" id="done-detail">Done</button></div></dialog>
+<div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>

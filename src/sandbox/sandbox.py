@@ -9,6 +9,10 @@ import tempfile
 import uuid
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 def prepare_script_file(payload: bytes) -> Path:
     # Create a temporary file to hold the payload script
     # Docker run moiunts files and no in memory python bytes, so we need to write the payload to a temporary file first
@@ -31,6 +35,7 @@ def sandbox_execute(script_path: Path, cpu_limit: str = "0.5", memory_limit: str
     docker_cmd = [
         "docker", 
         "run", 
+        "--pull=never",  # Build the image before serving requests; do not pull within the deadline
         "--rm", # Remove container when it exists else other dry run leaves a dead container 
         "--name", container_name,
         "--label", "cloudproject.sandbox=1",  # Lets tests and cleanup scripts find every sandbox container
@@ -49,14 +54,15 @@ def sandbox_execute(script_path: Path, cpu_limit: str = "0.5", memory_limit: str
         # Sandbox can process read but never modify it to prevent script tempering mid run
         "-v", f"{script_path}:/sandbox/script.py:ro", 
 
-        # Need to build a custom harded image later, now just use the official python image and run the script directly
-        "python:3.11-slim", 
-        "python", "/sandbox/script.py"
+        # The same runtime image can be tagged for ECR and used by EKS Jobs.
+        # Its entrypoint runs the per-request script mounted above.
+        os.environ.get("SANDBOX_IMAGE", "cloudproject-sandbox:dev"),
         ]
 
     try:
         # Timeout used to terminate a CPU throttled intinite loop script, otherwise it will run forever and never return
-        result = subprocess.run(docker_cmd, capture_output=True, text=True, timeout=timeout_seconds)
+        result = subprocess.run(docker_cmd, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
         # The timeout only killed the docker CLI client, the container is still running inside the Docker engine
         # Tell the engine to kill it; --rm then deletes it automatically

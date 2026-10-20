@@ -6,6 +6,9 @@ import base64
 import binascii
 import os
 import time
+import sys
+import uuid
+from pathlib import Path
  
 import requests
 from dotenv import load_dotenv
@@ -14,6 +17,8 @@ from flask import Flask, jsonify, request
 from src.sandbox.sandbox import dry_run
 from src.watchdog.verifier import NonceStore, VerificationError, verify_payload
 from src.resource_manager.resource_manager import resource_manager
+from src.gateway.activity import ActivityStore
+from src.gateway.dashboard import register_dashboard
 
 load_dotenv()  # Reads SHARED_SECRET etc.
 
@@ -22,6 +27,8 @@ ENDPOINT_URL = os.environ.get("ENDPOINT_URL", "http://127.0.0.1:5000/execute")
 NOTIFY_URL = os.environ.get("NOTIFY_URL", "")  # Central server's failure inbox
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 256 * 1024
+activity_store = ActivityStore(Path(__file__).resolve().parents[2] / ".data" / "activity.sqlite3")
  
 # One store shared by every request, so a nonce seen on one request is remembered for the next
 nonce_store = NonceStore()
@@ -53,18 +60,27 @@ def process_submission(body: dict) -> tuple[dict, int]:
             "timestamp": int(body["timestamp"]),
             "tag": body["tag"],
         }
-    except (KeyError, TypeError, ValueError, binascii.Error) as e:
+        if (not isinstance(message["nonce"], str) or not 1 <= len(message["nonce"]) <= 128
+                or not isinstance(message["tag"], str) or len(message["tag"]) != 64
+                or any(character not in "0123456789abcdefABCDEF" for character in message["tag"])
+                or len(message["payload"]) > 65536):
+            raise ValueError("invalid message fields")
+    except (KeyError, TypeError, ValueError, OverflowError, binascii.Error) as e:
         notify_failure("parse", f"malformed message: {e}", nonce)
         return {"delivered": False, "stage": "parse", "reason": "malformed message"}, 400
  
     # Stage 1: integrity verification. Always runs first and locally cuz its cheap.
+    if not SHARED_SECRET:
+        notify_failure("verify", "gateway secret is not configured", nonce)
+        return {"delivered": False, "stage": "verify", "reason": "gateway secret is not configured"}, 503
     t = time.perf_counter()
     try:
         payload = verify_payload(message, SHARED_SECRET, nonce_store)
         
     except VerificationError as e:
+        timings["verify_ms"] = round((time.perf_counter() - t) * 1000, 2)
         notify_failure("verify", str(e), nonce)
-        return {"delivered": False, "stage": "verify", "reason": str(e)}, 401
+        return {"delivered": False, "stage": "verify", "reason": str(e), "timings_ms": timings}, 401
     timings["verify_ms"] = round((time.perf_counter() - t) * 1000, 2)
 
     # Stage 2a: capacity check that gates the dry run specifically, not the whole request
@@ -72,7 +88,7 @@ def process_submission(body: dict) -> tuple[dict, int]:
     DRY_RUN_MEMORY_LIMIT = "128m"
     if not resource_manager.try_admit(DRY_RUN_MEMORY_LIMIT):
         notify_failure("capacity", "local host at capacity", nonce)
-        return {"delivered": False, "stage":"capacity", "reason":"local host at capacity"}, 503
+        return {"delivered": False, "stage":"capacity", "reason":"local host at capacity", "timings_ms": timings}, 503
  
     # Stage 2b: resource-bounded dry run. Since this is expensive, it only runs for legit payloads.
     t = time.perf_counter()
@@ -82,8 +98,9 @@ def process_submission(body: dict) -> tuple[dict, int]:
     except Exception as e:
         # Fail closed: if the sandbox itself is broken (e.g. Docker not running), the payload is dropped, never forwarded untested
         print(f"[gateway] dry_run failed unexpectedly: {e}")
+        timings["dry_run_ms"] = round((time.perf_counter() - t) * 1000, 2)
         notify_failure("dry_run", f"sandbox unavailable: {e}", nonce)
-        return {"delivered": False, "stage": "dry_run", "reason": "sandbox unavailable"}, 503
+        return {"delivered": False, "stage": "dry_run", "reason": "sandbox unavailable", "timings_ms": timings}, 503
     
     finally:
         # Container is gone by the time dry_run() returns = success, failure or exception. Release slot unconditioanlly
@@ -103,17 +120,43 @@ def process_submission(body: dict) -> tuple[dict, int]:
             headers={"Content-Type": "application/octet-stream"}, timeout=15,
         )
         resp.raise_for_status()
-    except requests.RequestException as e:
+        endpoint_response = resp.json()
+        if not isinstance(endpoint_response, dict) or not endpoint_response.get("executed") or endpoint_response.get("returncode") != 0:
+            raise ValueError("endpoint did not execute the script successfully")
+    except (requests.RequestException, ValueError) as e:
+        timings["forward_ms"] = round((time.perf_counter() - t) * 1000, 2)
         notify_failure("forward", f"endpoint unreachable: {e}", nonce)
         return {"delivered": False, "stage": "forward", "reason": "endpoint unreachable", "timings_ms": timings}, 502
     timings["forward_ms"] = round((time.perf_counter() - t) * 1000, 2)
  
-    return {"delivered": True, "endpoint_response": resp.json(), "timings_ms": timings}, 200
+    return {"delivered": True, "endpoint_response": endpoint_response, "timings_ms": timings}, 200
+
+
+def tracked_submission(body, name="CLI submission.py", scenario="external"):
+    started = time.perf_counter()
+    response, status = process_submission(body)
+    event = {"id": uuid.uuid4().hex, "name": name, "scenario": scenario,
+             "created_at": time.time(), "status_code": status,
+             "duration_ms": round((time.perf_counter() - started) * 1000, 2), "response": response}
+    try:
+        event = activity_store.record(event)
+    except Exception:
+        app.logger.exception("Could not save pipeline activity")
+        event["journal_error"] = "Result could not be saved to activity history."
+    return response, status, event
+
+
+register_dashboard(app, sys.modules[__name__])
+
+
+@app.errorhandler(413)
+def request_too_large(error):
+    return jsonify(error="Request too large. Scripts must be 64 KB or smaller."), 413
 
 @app.route("/submit", methods=["POST"])
 def submit():
     body = request.get_json(silent=True)  # None instead of an exception if the body isn't JSON
-    response, status = process_submission(body or {})
+    response, status, _ = tracked_submission(body or {})
     return jsonify(response), status
  
  

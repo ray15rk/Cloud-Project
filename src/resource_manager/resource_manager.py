@@ -45,6 +45,12 @@ class ResourceManager:
         with self._lock:
             self._committed_mb = max(0, self._committed_mb - freed_mb)
 
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {"total_mb": self.total_memory_mb, "committed_mb": self._committed_mb,
+                    "available_mb": max(0, self.total_memory_mb - self._committed_mb),
+                    "slots": self.total_memory_mb // 128, "per_run_mb": 128}
+
 # One instance shared across the whole process
 # Every request's admission decidion needs to see the same live counter
 resource_manager = ResourceManager()

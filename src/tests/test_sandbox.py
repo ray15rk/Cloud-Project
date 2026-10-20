@@ -55,6 +55,13 @@ def test_runs_as_non_root():
     assert result["status"] == "OK"
     assert result["stdout"].strip() != "0"
 
+
+def test_utf8_output_is_preserved():
+    text = "Hello, caf\u00e9 \u4f60\u597d \U0001f680"
+    result = dry_run(f"print({text!r})".encode("utf-8"))
+    assert result["status"] == "OK"
+    assert result["stdout"] == text + "\n"
+
 def test_cannot_write_filesystem():
     # The container filesystem is read-only, so writing a file must fail
     result = dry_run(b"open('/tmp/evil.txt', 'w').write('x')")

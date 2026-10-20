@@ -6,6 +6,7 @@ import src.gateway.gateway_app as gw
 from src.watchdog.sign import sign_payload
 from src.watchdog.verifier import NonceStore
 from src.resource_manager.resource_manager import ResourceManager
+from src.gateway.activity import ActivityStore
 
 SECRET = b"test-secret"
 
@@ -17,10 +18,11 @@ class FakeResponse:
 
 
 @pytest.fixture
-def client(monkeypatch):
+def client(monkeypatch, tmp_path):
     # Fresh secret and nonce store for every test, and record what the gateway does
     monkeypatch.setattr(gw, "SHARED_SECRET", SECRET)
     monkeypatch.setattr(gw, "nonce_store", NonceStore())
+    monkeypatch.setattr(gw, "activity_store", ActivityStore(tmp_path / "activity.sqlite3"))
 
     # Fresh resource manager with generous budget
     # Tests check HMAC/repay/forwarding logic instead of capacity behaviour, so that need enough room that admission always succeeds 
@@ -115,7 +117,7 @@ def test_endpoint_down_is_reported(client, monkeypatch):
 def test_sandbox_crash_fails_closed(client, monkeypatch):
     # If Docker is down, the payload must be dropped, not forwarded untested
     c, calls = client
-    def broken_dry_run(payload):
+    def broken_dry_run(payload, memory_limit=None):
         raise FileNotFoundError("docker not found")
     monkeypatch.setattr(gw, "dry_run", broken_dry_run)
     resp = c.post("/submit", json=signed_body())
