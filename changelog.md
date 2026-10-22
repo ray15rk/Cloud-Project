@@ -1,125 +1,129 @@
 # Changelog
 
-## 2026-10-12
-- Added a mutex lock to `NonceStore.check_and_record()` (`src/watchdog/verifier.py`)
-  to close a check-then-write race between concurrent requests sharing the
-  same nonce. Covered by `test_concurrent_replay` in `src/tests/test_watchdog.py`.
-- Added Phase 2 resource manager (`src/resource_manager/resource_manager.py`):
-  atomic, lock-protected memory counter gating local dry-run admission.
-  Memory-only (not CPU) by design — memory exhaustion risks a host crash
-  via the OOM killer, CPU contention just throttles gracefully. Wired
-  into `gateway_app.py` between HMAC verification and the dry run, so
-  capacity is checked per-payload at the point it's actually needed,
-  not for the whole request upfront. Fails closed (HTTP 503, stage
-  "capacity") when the local host is full — EKS bursting is not yet
-  implemented, so over-capacity payloads are dropped rather than run
-  over budget. Tests in `src/tests/test_resource_manager.py`, including
-  `test_concurrent_admission`, the same category of concurrency check
-  as `test_concurrent_replay` for `NonceStore`.
-- Manually verified the capacity-exceeded path through the real running
-  gateway (temporarily lowered `total_memory_mb` below a single dry
-  run's requirement, confirmed HTTP 503 with stage "capacity" before
-  the sandbox was ever reached).
-- Fixed a signature mismatch between `gateway_app.py`'s real `dry_run()`
-  call (now passes `memory_limit=` as a keyword, added when Phase 2 was
-  wired in) and `test_gateway.py`'s `fake_dry_run`/`broken_dry_run`
-  mocks, which still only accepted `payload`. The mismatch raised a
-  `TypeError` that was silently caught by the gateway's own
-  "sandbox unavailable" fail-closed handler, producing a plausible-looking
-  503 that masked the real cause. Both fakes now accept
-  `memory_limit=None`, matching the real function's signature.
-- Fixed the capacity-rejection branch in `process_submission()`
-  (`gateway_app.py`), which returned a bare dict instead of the
-  `(dict, status_code)` tuple every other branch returns — would have
-  crashed `submit()` with `ValueError: too many values to unpack` the
-  first time a real capacity rejection occurred. Added the missing
-  `, 503`.
-- Added an explicit stage assertion to `test_sandbox_crash_fails_closed`
-  (`resp.get_json()["stage"] == "dry_run"`) — it previously only checked
-  status code 503 and nothing forwarded, which is indistinguishable from
-  a capacity rejection and was silently passing for the wrong reason.
-- `test_capacity_exceeded_rejected` now passes and genuinely exercises
-  the capacity-rejected path (stage "capacity", 503, nothing forwarded,
-  central server notified) — confirmed it wasn't accidentally relying
-  on the Bug 1 TypeError to produce a matching status code.
-- Full `test_gateway.py` suite (10 cases) passing.
+## 2026-10-22 — Documentation reconciliation
 
-## Initial
-- HMAC watchdog (Phase 1): `src/watchdog/sign.py` + `verifier.py`. Binds
-  payload + nonce + timestamp; constant-time comparison; replay and
-  expiry checks. Tests in `src/tests/test_watchdog.py`.
-- Resource-bounded dry-run sandbox (Phase 3): `src/sandbox/sandbox.py`.
-  Docker-based, CPU/memory limits, execution deadline for CPU-bound
-  loops, OOM-kill detection. Hardened: no network, non-root user,
-  read-only filesystem, all capabilities dropped, no-new-privileges,
-  PID limit. Tests in `src/tests/test_sandbox.py`.
-- Endpoint device (`src/endpoint/endpoint_app.py`): receives a verified,
-  dry-run-tested payload and executes it for real, with no resource
-  limits of its own by design.
-- Gateway (`src/gateway/gateway_app.py`): ties watchdog + sandbox +
-  endpoint together end to end. Fails closed on any stage failure
-  (malformed input, bad HMAC, replay, dry-run failure, sandbox/endpoint
-  unreachable) and notifies the central server rather than dropping
-  silently. Tests in `src/tests/test_gateway.py` (Docker and the
-  endpoint mocked).
-- Central server (`src/sender/central_server.py`) and sender CLI
-  (`src/sender/send.py`, with `--tamper`/`--replay` flags) for driving
-  the pipeline manually.
-- Example payloads (`src/examples/`): `good.py`, `infinite_loop.py`,
-  `memory_hog.py`.
-- Full live pipeline (all four processes, real HTTP, no mocks) manually
-  verified: golden path, tamper, replay, infinite loop, memory leak —
-  all produced the expected stage/status/HTTP code.
+- Reorganized the README around setup, the one-command dashboard, configuration,
+  original CLI usage, verification, and remaining AWS work.
+- Standardized Windows commands to use the virtual environment directly and added
+  macOS/Linux guidance. Corrected the `env.example` name and preserved existing
+  `.env` configuration in the setup instructions.
+- Removed stale statements about running the base image directly, needing code
+  edits to test capacity, or having no endpoint timeout.
+- Documented runtime limits, retained history, drafts, best-effort notifications,
+  and the difference between a dashboard request and its individual pipeline results.
+- Reconciled historical test-stub notes and consolidated outstanding AWS tasks.
+  Python remains the implemented runtime; other languages are not implemented.
+- Documentation-only validation checked local links, command targets, implementation
+  consistency, whitespace, and conflict markers. The recorded 62-test and browser
+  results below are from the preceding implementation verification, not a new
+  application test run for these documentation edits.
 
+## 2026-10-21 — Local dashboard, reusable image, and regression fixes
 
-## TODO
-**The scripts testing assumes all is in python for now, need to change once all is done.
-- EKS cloud-burst path for the over-capacity case — resource manager currently
-  fails closed (drops the payload) rather than bursting anywhere, since the
-  cluster isn't provisioned yet.
+### Added
 
-  1. **Provision AWS infrastructure** (not started):
-     - Stand up a small EKS cluster (eksctl or Terraform).
-     - Push the sandbox's container image to ECR — currently `sandbox.py`
-       runs `python:3.11-slim` directly with CLI flags for hardening
-       (`--network none`, `--user 65534:65534`, etc.); for EKS this
-       hardening needs to move into a Kubernetes Job spec / Pod
-       SecurityContext instead of `docker run` flags, since there's no
-       Docker CLI on the other side.
-     - Create the Auto Scaling Service-Linked Role during this setup
-       step specifically — proposal Section 5.3 depends on this
-       happening during deployment, not in the request hot path.
+- Relay dashboard on the existing Flask gateway at `http://127.0.0.1:8000`, with
+  responsive overview, workbench, activity, and system status views.
+- UTF-8 Python editing, `.py` uploads/drag-and-drop, built-in samples, and signed,
+  tampered, and replayed submissions. Traces show actual stage outcomes, timings,
+  HTTP result codes, and endpoint output or failure reasons.
+- SQLite activity history for dashboard and CLI/API submissions, search/filters,
+  JSON details, clipboard actions, recent failure summaries, and CSV export with
+  spreadsheet-formula escaping. Up to 2,000 records are retained; the latest 100
+  are displayed/exportable. Stored stdout/stderr are bounded; drafts use browser
+  local storage.
+- Local resource snapshots, service/image health checks, manual refresh, and a
+  capacity test. With defaults, six probes admit four local dry runs and reject
+  two at stage `capacity` when no other submissions are running.
+- `python -m src.dashboard` launcher for all three local services, with localhost
+  binding, port-conflict handling, and Ctrl+C shutdown.
+- `docker/sandbox/Dockerfile` and restricted build context for
+  `cloudproject-sandbox:dev`, based on `python:3.11-slim-bookworm`. The image runs
+  as UID/GID 65534 and executes separately mounted scripts. `SANDBOX_IMAGE` selects
+  it; runtime flags retain the existing isolation protections.
+- `docs/aws-setup.md` and `scripts/check-aws.ps1` for Learner Lab credentials and
+  read-only identity/ECR/EKS checks. No AWS provisioning or execution is implemented.
+- Dashboard/endpoint regression tests, optional Playwright dependencies in
+  `requirements-dev.txt`, and `scripts/check_dashboard.py` for real HTTP/Docker and
+  desktop/mobile checks using temporary history and separate ports.
+- Gitignore entries for local activity data and generated browser artifacts.
 
-  2. **Replace the fail-closed branch in `process_submission()`**
-     (`gateway_app.py`) with real Kubernetes Job submission:
-     - When `resource_manager.try_admit()` returns `False`, submit a
-       Job via the Kubernetes API (`kubernetes` Python client) instead
-       of immediately returning 503.
-     - Job must mount/receive the same payload, run the same dry-run
-       logic as `sandbox.py`'s local path, and report back
-       success/oom/timeout the same way `dry_run()` does now — ideally
-       sharing code with `sandbox.py` rather than duplicating it, so
-       the two execution paths can't silently drift apart.
-     - Add the retry-with-backoff from Section 5.3 around the first
-       Job submission, to absorb any residual IAM propagation delay.
+### Fixed and hardened
 
-  3. **Re-test the original motivating scenario for real**, not just in
-     unit tests: 3 payloads arriving concurrently, local capacity for
-     only 2 — confirm the 3rd actually completes via a real EKS Job,
-     not just that it correctly gets *rejected* locally (which is all
-     `test_capacity_exceeded_rejected` currently proves).
+- Restricted dashboard access to loopback hosts and required a page token before
+  signing/submission actions. Signing keys stay on the server. Added response
+  security headers and script/request-size validation.
+- Preserved UTF-8 output in Docker capture and endpoint execution on Windows.
+  The endpoint uses the active Python interpreter, returns stdout/stderr and exit
+  status, handles timeout/runtime failures, and removes its temporary script.
+- Rejected malformed signatures, non-ASCII operator tokens, invalid UTF-8/form data,
+  and oversized scripts without unintended HTTP 500s. Tampering preserves payload
+  size so a 64 KB script still tests HMAC rejection.
+- Recorded timings on verification and unavailable-sandbox failure paths. Invalid
+  endpoint JSON or unsuccessful execution cannot be reported as successful delivery.
+- Reported unexpected health response shapes as unavailable; manual refresh bypasses
+  the health cache.
+- Closed journal connections explicitly for Windows cleanup, isolated test history
+  from user activity, and fixed narrow-screen table overflow.
+- Reset rejected upload selections and notification accessibility state on Escape.
+- Corrected the remaining `broken_dry_run` test stub to accept `memory_limit`, so
+  the unavailable-sandbox test raises its intended error rather than an argument
+  mismatch. The earlier changelog overstated completion of both test-stub fixes.
 
-  4. **Revisit `ResourceManager` once both paths exist**:
-     - Currently tracks only local memory. Once EKS is a real option,
-       decide whether "local full" should always burst, or whether EKS
-       itself needs its own capacity/cost awareness (cluster autoscaling
-       limits, cost caps) rather than being treated as infinite capacity.
-     - `test_gateway.py`'s mocks will need a fake Kubernetes Job submission
-       alongside the existing fake `dry_run`/`requests.post`, following the
-       same pattern already used for Docker/endpoint mocking.
+### Verified
 
-  5. **Update `send.py`/example scripts** if testing needs a way to force
-     the over-capacity branch deliberately (e.g. a `--force-burst` flag
-     or temporarily shrinking `total_memory_mb`), rather than only being
-     able to trigger it by hand-editing the gateway like today's manual
-     check did.
+- Full regression suite: **62 tests passed**, including real Docker sandbox tests.
+- Original sender CLI: delivery, tamper, and replay over real HTTP; central reception
+  of failure metadata was asserted.
+- Browser checks: valid execution, timeout/OOM isolation, Unicode, uploads and
+  drag-and-drop, invalid/oversized files, empty-editor handling, traces, clipboard,
+  capacity, controlled service failures, notifications, search/filters, CSV export,
+  details, and history after reload.
+- Desktop, 390 px, and 768 px layouts passed without page overflow or uncaught
+  browser errors. The one-command launcher was smoke-tested; no sandbox containers
+  remained after verification.
+- ECR publication, EKS, node autoscaling, and IAM retry execution were not tested
+  against AWS and remain pending.
+
+## 2026-10-12 — Local admission and replay concurrency
+
+- Added a mutex to `NonceStore.check_and_record()` for atomic concurrent replay
+  detection, with coverage in `test_watchdog.py`.
+- Added the lock-protected, memory-based `ResourceManager` between verification and
+  dry run. Exhaustion fails closed with HTTP 503 at stage `capacity`.
+- Added admission/release and concurrent reservation tests; manually checked the
+  running gateway's capacity-rejection path with a reduced budget.
+- Corrected the capacity branch's `(response, status_code)` return and tightened
+  gateway assertions so a sandbox failure cannot pass as a capacity failure.
+  Test-double keyword compatibility received its remaining fix on 2026-10-21.
+
+## Initial local pipeline
+
+- Added HMAC-SHA256 over payload, nonce, and timestamp, constant-time comparison,
+  replay rejection, freshness checks, and watchdog tests.
+- Added disposable Docker dry runs with CPU/memory restrictions, execution deadline,
+  OOM-result handling, no network, non-root execution, read-only mounts/filesystem,
+  dropped capabilities, no-new-privileges, and a process limit.
+- Added the gateway, endpoint, central notification server, sender CLI
+  (`--tamper` / `--replay`), and Python examples.
+- Forwarded only the original verified payload after a successful dry run. The
+  endpoint executes on the host with a 10-second timeout and no sandbox CPU/memory
+  caps; gateway failures trigger a central notification attempt.
+- Added isolated watchdog/sandbox/gateway tests and manually exercised local success,
+  tamper, replay, infinite-loop, and memory-exhaustion scenarios.
+
+## Remaining work
+
+- ECR publication and EKS provisioning, required roles, network-policy enforcement,
+  bounded worker capacity, and node autoscaling.
+- Deployment-time Auto Scaling service-linked role setup/verification and bounded
+  infrastructure retries for IAM propagation/readiness. Failed payload execution
+  must not be retried automatically.
+- Disposable hardened EKS Jobs, result collection/cleanup, and gateway overflow
+  integration.
+- Real two-local/one-cloud concurrency demonstration, cloud-transition and overload
+  measurements, evaluation graphs, and cloud-side capacity/cost boundaries.
+
+The local capacity test is complete; it proves admission and safe rejection, not
+cloud bursting. See [README](readme.md#remaining-aws-work) and
+[AWS setup](docs/aws-setup.md) for the current continuation path.
