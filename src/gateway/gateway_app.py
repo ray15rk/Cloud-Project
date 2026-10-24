@@ -19,6 +19,7 @@ from src.watchdog.verifier import NonceStore, VerificationError, verify_payload
 from src.resource_manager.resource_manager import resource_manager
 from src.gateway.activity import ActivityStore
 from src.gateway.dashboard import register_dashboard
+from src.ingress import ENDPOINT_TIMEOUT, NOTIFY_TIMEOUT
 
 load_dotenv()  # Reads SHARED_SECRET etc.
 
@@ -41,7 +42,7 @@ def notify_failure(stage: str, reason: str, nonce: str | None) -> None:
     if not NOTIFY_URL:
         return
     try:
-        requests.post(NOTIFY_URL, json=report, timeout=2)
+        requests.post(NOTIFY_URL, json=report, timeout=NOTIFY_TIMEOUT)
     except requests.RequestException as e:
         # A broken notification channel must not crash the gateway or change the decision
         print(f"[gateway] could not notify central server: {e}")
@@ -117,7 +118,7 @@ def process_submission(body: dict) -> tuple[dict, int]:
     try:
         resp = requests.post(
             ENDPOINT_URL, data=payload,
-            headers={"Content-Type": "application/octet-stream"}, timeout=15,
+            headers={"Content-Type": "application/octet-stream"}, timeout=ENDPOINT_TIMEOUT,
         )
         resp.raise_for_status()
         endpoint_response = resp.json()
