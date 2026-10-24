@@ -13,7 +13,7 @@ def test_queue_limit_and_restart_claim(tmp_path):
     store = CloudSubmissionStore(path, max_inflight=1)
     first = uuid.uuid4().hex
     store.enqueue(first, "nonce-1", b"print(1)", "one.py", "test", 1.0)
-    assert os.stat(path).st_mode & 0o077 == 0
+    if os.name != 'nt': assert os.stat(path).st_mode & 0o077 == 0
     with pytest.raises(CloudCapacityError):
         store.enqueue(uuid.uuid4().hex, "nonce-2", b"print(2)", "two.py", "test", 1.0)
 
