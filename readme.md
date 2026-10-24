@@ -115,6 +115,8 @@ The EKS image has been published to ECR, and the gateway can run overflow dry
 runs as hardened Kubernetes Jobs. See [EKS team handoff](docs/eks-team-handoff.md)
 for the architecture and options for teammates, and
 [deployment notes](infra/eks/README.md) for this Learner Lab environment.
+Teammates with separate accounts can follow the
+[step-by-step EKS setup](docs/eks-teammate-setup.md).
 
 ## Nginx
 

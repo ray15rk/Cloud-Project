@@ -109,13 +109,12 @@ individual access rather than sharing credentials.
 ### Use a different Learner Lab AWS account
 
 A different account cannot automatically use this private ECR image or this
-cluster. The teammate must create an ECR repository and build/push the sandbox
-image in **their own account**, provision their own EKS cluster/node group,
-apply the manifests under `infra/k8s`, and set their own immutable `EKS_IMAGE`
-URI, `EKS_CONTEXT`, credentials, and API endpoint access limit. The deployment
-notes document the present cluster, but the repository does **not** contain a
-one-command cluster provisioning script. Account-specific IAM role names,
-subnets, public IP ranges, and image digests cannot simply be copied.
+cluster. Follow the [step-by-step teammate setup](eks-teammate-setup.md) to
+build/push the sandbox image in **your own account**, create the bounded EKS
+cluster and node group, enable network isolation, configure `.env`, run an
+overflow test, and clean up. It uses commands rather than a one-command
+provisioning script because IAM role names, subnets, public IP ranges, and
+image digests differ by account. Do not copy Rance's values.
 
 ## Sharing and operating the project
 

@@ -52,7 +52,12 @@ aws eks list-clusters --region REGION --max-items 1
 
 Do not paste credential values into chat, terminal output, or this repository.
 
-## 3. Remaining implementation order
+## 3. Recreate the EKS deployment
+
+For exact commands to build/push the image, create a cluster and bounded node
+group in your own Learner Lab account, enable sandbox network isolation, run an
+overflow test, and clean up, follow the [teammate setup guide](eks-teammate-setup.md).
+The outline below explains the sequence those commands implement.
 
 1. Create an ECR repository and push `cloudproject-sandbox:dev`.
 2. Verify the lab's available IAM roles and EKS provisioning permissions. Set up
@@ -62,7 +67,7 @@ Do not paste credential values into chat, terminal output, or this repository.
 4. Run the image as a disposable Kubernetes Job with resource limits, deadlines,
    a restrictive security context, no service-account token or Docker socket,
    isolated networking, disabled payload retries, and automatic cleanup.
-5. Implement EKS execution and bounded infrastructure retries in the gateway.
+5. Configure the existing gateway's EKS execution path and bounded retries.
 6. Demonstrate two concurrent local runs plus one cloud run, then capture failure,
    timing, overload, notification, and cleanup results for the project report.
 

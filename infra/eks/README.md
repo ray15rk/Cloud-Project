@@ -45,6 +45,9 @@ prepared but cannot enforce a limit on that cluster-admin identity.
 
 For an explanation of which components run locally, what AWS hosts, and how
 teammates can use this code, see [the team handoff](../../docs/eks-team-handoff.md).
+For a complete setup in a separate Learner Lab account, follow the
+[teammate setup guide](../../docs/eks-teammate-setup.md). The commands below
+describe the existing deployment in Rance's account.
 
 ## Run the gateway on this Mac
 
