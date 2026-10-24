@@ -5,6 +5,7 @@ project's private ECR image, EKS cluster, one-to-two-node managed node group,
 sandbox namespace, and network isolation in **your own** AWS account. It does
 not give you access to Rance's separate Learner Lab account. The gateway,
 dashboard, central server, and final endpoint still run on your computer.
+For Windows PowerShell, follow the [Windows setup guide](eks-teammate-setup-windows.md).
 
 The commands below create billable EKS and EC2 resources. Check your lab's
 remaining credit and allowed services/instance types first. Our lab allowed
@@ -15,7 +16,8 @@ shared node role to work around a denial.
 
 ## 1. Prepare your computer and lab account
 
-Install AWS CLI v2, `kubectl`, Docker Desktop, and Python 3.11 or newer. Clone
+Install AWS CLI v2, `kubectl`, Docker Desktop, Python 3.11 or newer, and Nginx.
+Clone
 the `rance` branch and install the project's Python requirements:
 
 ```sh
@@ -137,8 +139,7 @@ the instance type.
 LAUNCH_TEMPLATE=cloudproject-eks-nodes
 aws ec2 create-launch-template --region "$REGION" \
   --launch-template-name "$LAUNCH_TEMPLATE" \
-  --launch-template-data \
-  '{"MetadataOptions":{"HttpTokens":"required","HttpPutResponseHopLimit":1,"HttpEndpoint":"enabled"}}'
+  --launch-template-data file://infra/eks/launch-template-data.json
 aws eks create-nodegroup --region "$REGION" --cluster-name "$CLUSTER" \
   --nodegroup-name "$NODEGROUP" --node-role "$NODE_ROLE_ARN" \
   --subnets "$SUBNET_A" "$SUBNET_B" --instance-types t3.medium \
@@ -172,13 +173,13 @@ aws eks list-addons --region "$REGION" --cluster-name "$CLUSTER" --output table
 ```sh
 aws eks create-addon --region "$REGION" --cluster-name "$CLUSTER" \
   --addon-name vpc-cni --resolve-conflicts OVERWRITE \
-  --configuration-values '{"enableNetworkPolicy":"true"}'
+  --configuration-values file://infra/eks/vpc-cni-policy.json
 ```
 
 ```sh
 aws eks update-addon --region "$REGION" --cluster-name "$CLUSTER" \
   --addon-name vpc-cni \
-  --configuration-values '{"enableNetworkPolicy":"true"}'
+  --configuration-values file://infra/eks/vpc-cni-policy.json
 ```
 
 Wait for the managed add-on to be `ACTIVE`, then apply the CoreDNS allowance
@@ -191,8 +192,7 @@ kubectl --context "$CLUSTER" apply -f infra/k8s/coredns-networkpolicy.yaml
 kubectl --context "$CLUSTER" apply -f infra/k8s/sandbox-namespace.yaml
 aws eks update-addon --region "$REGION" --cluster-name "$CLUSTER" \
   --addon-name vpc-cni \
-  --configuration-values \
-  '{"enableNetworkPolicy":"true","env":{"NETWORK_POLICY_ENFORCING_MODE":"strict"}}'
+  --configuration-values file://infra/eks/vpc-cni-policy-strict.json
 aws eks wait addon-active --region "$REGION" --cluster-name "$CLUSTER" --addon-name vpc-cni
 kubectl --context "$CLUSTER" get networkpolicy -A
 kubectl --context "$CLUSTER" -n cloudproject-sandbox get resourcequota
@@ -234,7 +234,7 @@ EKS_IMAGE=YOUR_ACCOUNT.dkr.ecr.us-east-1.amazonaws.com/cloudproject-sandbox@sha2
 EKS_MAX_INFLIGHT=3
 EKS_NODE_SCALING_ENABLED=true
 AWS_REGION=us-east-1
-GATEWAY_URL=http://127.0.0.1:8000/submit
+GATEWAY_URL=http://127.0.0.1:8080/submit
 ```
 
 The optional gateway-run node scaler needs permission for
@@ -253,7 +253,14 @@ Start Docker Desktop, then start the local services and open the dashboard:
 ```
 
 Open `http://127.0.0.1:8000` on the same computer. In a second terminal,
-check local and cloud paths:
+start the project's Nginx proxy from the repository root:
+
+```sh
+nginx -t -p "$PWD/nginx/" -c nginx.conf
+nginx -p "$PWD/nginx/" -c nginx.conf
+```
+
+In a third terminal, check local and cloud paths through Nginx:
 
 ```sh
 .venv/bin/python -m src.sender.send src/examples/good.py
@@ -265,6 +272,9 @@ same example again. The CLI should first show HTTP 202, then a final delivered
 result with `execution_location: eks`. Restore the ordinary 256 MB budget by
 restarting without that temporary override. The dashboard's System status
 page shows live EKS/scaler health and submission metrics.
+
+When finished, stop the project's Nginx proxy with
+`nginx -p "$PWD/nginx/" -c nginx.conf -s quit`.
 
 If `kubectl` suddenly cannot reach EKS, refresh lab credentials and check the
 API allowlist against your current public IP. Update your own cluster with:

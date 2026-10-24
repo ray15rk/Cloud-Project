@@ -56,7 +56,8 @@ Do not paste credential values into chat, terminal output, or this repository.
 
 For exact commands to build/push the image, create a cluster and bounded node
 group in your own Learner Lab account, enable sandbox network isolation, run an
-overflow test, and clean up, follow the [teammate setup guide](eks-teammate-setup.md).
+overflow test, and clean up, follow the [macOS/Linux guide](eks-teammate-setup.md)
+or [Windows PowerShell guide](eks-teammate-setup-windows.md).
 The outline below explains the sequence those commands implement.
 
 1. Create an ECR repository and push `cloudproject-sandbox:dev`.

@@ -116,7 +116,8 @@ runs as hardened Kubernetes Jobs. See [EKS team handoff](docs/eks-team-handoff.m
 for the architecture and options for teammates, and
 [deployment notes](infra/eks/README.md) for this Learner Lab environment.
 Teammates with separate accounts can follow the
-[step-by-step EKS setup](docs/eks-teammate-setup.md).
+[macOS/Linux EKS setup](docs/eks-teammate-setup.md) or
+[Windows PowerShell EKS setup](docs/eks-teammate-setup-windows.md).
 
 ## Nginx
 

@@ -109,7 +109,8 @@ individual access rather than sharing credentials.
 ### Use a different Learner Lab AWS account
 
 A different account cannot automatically use this private ECR image or this
-cluster. Follow the [step-by-step teammate setup](eks-teammate-setup.md) to
+cluster. Follow the [macOS/Linux setup](eks-teammate-setup.md) or
+[Windows PowerShell setup](eks-teammate-setup-windows.md) to
 build/push the sandbox image in **your own account**, create the bounded EKS
 cluster and node group, enable network isolation, configure `.env`, run an
 overflow test, and clean up. It uses commands rather than a one-command
