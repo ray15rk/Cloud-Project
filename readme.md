@@ -24,8 +24,8 @@ capacity probes, activity search/filtering, JSON details, and CSV export.
 
 Run `docker build -t cloudproject-sandbox:dev docker/sandbox` first if the image
 has not been built. Follow SETUP below if dependencies or `.env` are missing.
-Ctrl+C stops the dashboard's three services. The original four-terminal workflow
-and sender CLI still work; gateway submissions also appear in dashboard history.
+Ctrl+C stops the dashboard's three services. Use the Nginx workflow below for
+the sender CLI; gateway submissions also appear in dashboard history.
 
 The operator dashboard is restricted to localhost. Signing happens on the server;
 the shared HMAC secret is never sent to the browser. Only run scripts you trust,
@@ -117,27 +117,137 @@ for the architecture and options for teammates, and
 [deployment notes](infra/eks/README.md) for this Learner Lab environment.
 
 ## Nginx
-You need Docker Desktop running and the sandbox image built (docker build -t cloudproject-sandbox:dev docker/sandbox).
 
-This is to set up and test Nginx. Make sure Nginx is already downloaded from the above SETUP steps.
+The public submission path is `http://127.0.0.1:8080/submit`. Port 8000 is
+internal to the gateway. In an existing `.env`, replace the old
+`GATEWAY_URL=http://127.0.0.1:8000/submit` with:
 
-Run in five terminals (venv active, from the project folder). For the original
-Nginx checks, start the gateway with `EKS_ENABLED=false`; those checks expect
-overflow to return HTTP 503. To test EKS overflow through Nginx, leave
-`EKS_ENABLED=true` and use the sender CLI instead.
+```dotenv
+GATEWAY_URL=http://127.0.0.1:8080/submit
+```
 
-1. Terminal 1: `python -m src.sender.central_server`
-2. Terminal 2: `python -m src.endpoint.endpoint_app`
-3. Terminal 3: `python -m src.gateway.serve` (should print Gateway on http://127.0.0.1:8000 (8 threads, 4 sandbox slots, dashboard off)) 
-4. Terminal 4: Start NGINX (change file path accordingly). Windows: `FILE_PATH_TO\nginx.exe -p  YOUR_FILE_PATH_TO/Cloud-Project/nginx/" -c nginx.conf` or macOS/Linux: `nginx -p "$PWD/nginx/" -c nginx.conf`
-5. Terminal 5: `python -m scripts.check_nginx`. You should see 9 [PASS] lines and 9/9 checks passed. The headline one is “6 simultaneous slow payloads: 4 delivered, 2 rejected at stage ‘capacity’”.
+Do not put `set` or `export` inside `.env`. The sender default and env.example
+already use 8080. Docker Desktop must be running with Linux containers, and the
+sandbox image must exist:
 
-To send through Nginx, set `GATEWAY_URL=http://127.0.0.1:8080/submit` in
-`.env`, then run `python -m src.sender.send src/examples/good.py`. Nginx
-proxies both `POST /submit` and the read-only `/submissions/<id>` status URL,
-so the CLI can poll EKS results without exposing the dashboard.
+```sh
+docker info --format '{{.OSType}}'
+docker build -t cloudproject-sandbox:dev docker/sandbox
+```
 
-To stop Nginx, simply run `FILE_PATH_TO\nginx.exe -p  YOUR_FILE_PATH_TO/Cloud-Project/nginx/" -c nginx.conf -s quit` for Windows or `nginx -p "$PWD/nginx/" -c nginx.conf -s quit` for macOS / Linux
+The Nginx capacity checks expect `EKS_ENABLED=false`, so overflow returns
+HTTP 503. To demonstrate EKS cloud bursting through Nginx, use
+`EKS_ENABLED=true` and send signed scripts with `src.sender.send`. Nginx also
+proxies `/submissions/<id>`, which the sender polls for cloud results.
+
+Both `nginx/logs/.gitkeep` and `nginx/temp/.gitkeep` are tracked. If a downloaded
+copy omits empty directories, create `nginx/logs` and `nginx/temp` before starting.
+There is no pip package that supplies these project directories.
+
+### Complete automated verification
+
+With the venv active, from the project root:
+
+```sh
+python -m scripts.check_stack
+```
+
+This runs the full test suite, starts the central server, endpoint, gateway and
+project Nginx, checks ingress protections, measures normal traffic, exercises the
+sender examples, deliberately stops the endpoint and gateway to test outages,
+checks the real 45-second proxy timeout and aggregated notifications, and stops its own services. It records step
+results, measurements and service logs in a printed `artifacts/nginx-*` folder.
+It refuses to start if ports 5000, 8000, 8080 or 9000 are already occupied and
+never stops a pre-existing service. A successful run exits with code zero.
+
+On macOS, Homebrew may already run its default Nginx welcome-page server on 8080.
+Check with `brew services list` and `lsof -nP -iTCP:8080 -sTCP:LISTEN`. If that is
+the conflicting server, stop it using `brew services stop nginx` before testing;
+restore it afterward using `brew services start nginx` if it was previously on.
+On Windows, stop the existing Nginx instance using its original prefix/config;
+do not terminate unrelated Python processes. If the command is unavailable, add
+the Nginx installation directory to PATH before using the automated runner.
+
+### Manual startup (five terminals, plus optional monitoring)
+
+Activate the venv in each terminal, from the project root. Use
+`source .venv/bin/activate` on macOS/Linux or `.\.venv\Scripts\Activate.ps1` in
+PowerShell. Then:
+
+1. Central server: `python -m src.sender.central_server`
+2. Endpoint: `python -m src.endpoint.endpoint_app`
+3. Gateway: `python -m src.gateway.serve` (one process, eight threads, four sandbox slots)
+4. Validate and start the project Nginx using the commands below.
+5. Verify: `python -m scripts.check_nginx --benchmark --report artifacts/nginx-manual.json`
+
+macOS/Linux (keep the quoted prefix because the project path may contain spaces):
+
+```sh
+nginx -t -p "$PWD/nginx/" -c nginx.conf
+nginx -p "$PWD/nginx/" -c nginx.conf
+# Shutdown after testing:
+nginx -p "$PWD/nginx/" -c nginx.conf -s quit
+```
+
+Windows PowerShell (adjust the executable path):
+
+```powershell
+$nginxPrefix = (Join-Path (Get-Location).Path 'nginx').Replace('\', '/') + '/'
+& 'C:\nginx\nginx.exe' -t -p $nginxPrefix -c nginx.conf
+& 'C:\nginx\nginx.exe' -p $nginxPrefix -c nginx.conf
+# Shutdown after testing:
+& 'C:\nginx\nginx.exe' -p $nginxPrefix -c nginx.conf -s quit
+```
+
+The live check prints a result for each protection and fails on missing request
+outcomes or thread errors. Expect four delivered and two capacity-rejected
+submissions in the six-request probe. With `--benchmark` it also checks ten
+normal signed submissions, twenty paced ingress requests and eighty sustained-overload
+requests. Proxy overload is
+429; local sandbox capacity is 503, stage `capacity`.
+
+For continuous ingress alerts, run a sixth terminal:
+
+```sh
+python -m scripts.monitor_nginx
+```
+
+This sends at most one aggregated notification every ten seconds when new
+408/413/429 or proxy-generated 502/504 failures occur. It stays quiet otherwise.
+`NOTIFY_URL` must point to the central server. Only counts and up to three request
+IDs are sent, never payloads or secrets. The cursor is saved in
+`.data/nginx-monitor.json` after acknowledgement; failed delivery is retried.
+Run one monitor per cursor file. Lost acknowledgements can produce duplicate
+summaries. Rename rotated logs and run `nginx -p ... -c nginx.conf -s reopen`;
+avoid rotation before the monitor has consumed the current file's tail.
+
+Use Ctrl+C to stop the monitor and Python services; stop Nginx with `-s quit`.
+The automated runner performs these shutdown steps for its own services.
+
+### Limits, timeouts, and evaluation
+
+See [Nginx evaluation](docs/nginx-evaluation.md) for measured results and tuning.
+The default limit is 20 requests/s per IP, burst 10, plus eight active requests
+per IP and eight in total. Keep the Nginx concurrency cap at or below the gateway
+thread count when tuning. The six-request capacity probe deliberately fits below
+that cap. These are local-demo settings, not a claim of production capacity.
+
+Nginx buffers request bodies before forwarding. Client header/body inactivity is
+limited to five seconds; gateway connect/send/read inactivity limits are 2/5/45
+seconds. The sender uses a 3-second connect timeout and 60-second read timeout;
+endpoint forwarding uses 2/15 seconds and the sandbox execution deadline is ten
+seconds. This leaves processing margin without a client timing out before the
+proxy's configured read timeout. These are layered inactivity limits, not a hard
+end-to-end cancellation guarantee: slow trickles and work already dispatched may
+outlive a disconnected client. Do not automatically retry a script whose outcome
+is unknown. Review the Learner Lab budget before running EKS workloads.
+
+JSON access logs include request ID, status, upstream timings and rejection
+source; bodies and query strings are excluded. Nginx returns JSON for its own
+413/429/502/504 errors and preserves gateway JSON errors. The sender also handles
+HTML errors from other proxies. Keep the single-process gateway: multiple Python
+workers would have separate replay stores and capacity counters until shared
+state is implemented.
 
 ## TESTS
 All tests (Docker Desktop must be running):   python -m pytest src/tests -v
@@ -169,8 +279,8 @@ print(response.json())
 ## RUNNING THE FULL PIPELINE
 
 This runs all three real processes together over actual HTTP - not mocks, not isolated
-unit tests. Needs four terminals, all opened from the Cloud-Project folder, with the
-venv activated and .env already set up (Setup step 4).
+unit tests. Use the five-terminal Nginx startup above, with the venv activated and `.env`
+configured. Then send the following examples through port 8080.
 
 Terminal 1 - central server (failure notification inbox):
     python -m src.sender.central_server
@@ -179,9 +289,9 @@ Terminal 2 - endpoint (Device B):
     python -m src.endpoint.endpoint_app
 
 Terminal 3 - gateway (watchdog -> dry run -> forward):
-    python -m src.gateway.gateway_app
+    python -m src.gateway.serve
 
-Terminal 4 - send test payloads through the gateway:
+Terminal 5 - send test payloads through Nginx (start Nginx in Terminal 4 as above):
 
     Golden path (should deliver, HTTP 200):
         python -m src.sender.send src/examples/good.py

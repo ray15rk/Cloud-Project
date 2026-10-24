@@ -61,6 +61,7 @@ EKS_NODE_SCALING_ENABLED=true
 EKS_CLUSTER=cloudproject-sandbox-lab
 EKS_NODEGROUP=sandbox-workers
 AWS_REGION=us-east-1
+GATEWAY_URL=http://127.0.0.1:8000/submit
 ```
 
 Start Docker Desktop, then run `.venv/bin/python -m src.dashboard` from the
@@ -70,6 +71,9 @@ HTTP 202 first; the CLI polls for the final status. To reliably demonstrate
 overflow, temporarily start the dashboard with
 `LOCAL_MEMORY_BUDGET_MB=1 .venv/bin/python -m src.dashboard`, then restore
 the ordinary 256 MB budget on the next start.
+
+Set `GATEWAY_URL` to port 8000 when using the dashboard directly as above.
+Use port 8080 when Nginx is running and you want to submit through it.
 
 The cluster API allowlist contains the operator's public IP at creation time.
 If the Mac's public IP changes, update EKS public access CIDRs before running

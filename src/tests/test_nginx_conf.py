@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 
 from src.gateway.serve import MAX_BODY_BYTES
+from src.ingress import PROXY_READ_SECONDS, CLIENT_TIMEOUT, ENDPOINT_TIMEOUT
 
 CONF = (Path(__file__).resolve().parents[2] / "nginx" / "nginx.conf").read_text()
 CODE = re.sub(r"#.*", "", CONF)  # ignore comments
@@ -33,4 +34,15 @@ def test_post_is_never_retried():
 
 def test_read_timeout_outlasts_a_dry_run():
     seconds = int(re.search(r"proxy_read_timeout\s+(\d+)s;", CODE).group(1))
-    assert seconds >= 60
+    assert seconds == PROXY_READ_SECONDS
+    assert 10 + sum(ENDPOINT_TIMEOUT) + 5 < seconds < CLIENT_TIMEOUT[1]
+
+
+def test_concurrency_allows_capacity_probe_but_bounds_gateway_load():
+    from src.gateway.serve import choose_threads
+    # Nginx does not account for empty keys; $server_name must have a value.
+    assert re.search(r"server_name\s+pipeline-gateway;", CODE)
+    for zone in ("client_connections", "total_connections"):
+        limit = int(re.search(rf"limit_conn\s+{zone}\s+(\d+);", CODE).group(1))
+        assert 6 <= limit <= choose_threads(4, None)
+    assert re.search(r"limit_conn_status\s+429;", CODE)
