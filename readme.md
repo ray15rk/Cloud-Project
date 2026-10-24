@@ -47,20 +47,23 @@ Screenshots are saved in `artifacts/` (gitignored).
 
 ## SETUP
 1. Install Python 3.11+ and Docker Desktop.
+
+2. Install NGINX. On Windows, download the stable zip from **nginx.org** and unzip it to a path without spaces, such as C:\nginx. On macOS or Linux, use brew install nginx or apt install nginx.
+    
  
-2. From the Cloud-Project folder, create and activate a virtual environment:
+3. From the Cloud-Project folder, create and activate a virtual environment:
     python -m venv .venv
     .venv\Scripts\Activate.ps1          (Windows)
     source .venv/bin/activate           (macOS / Linux)
  
-3. pip install -r requirements.txt
+4. pip install -r requirements.txt
  
-4. Copy env.example to .env and set a real secret:
+5. Copy env.example to .env and set a real secret:
     Copy-Item env.example .env          (PowerShell; only if .env does not exist)
     python -c "import secrets; print(secrets.token_hex(32))"
     Paste the result as SHARED_SECRET. .env is gitignored - never commit it.
  
-5. Start Docker Desktop with the Linux container engine, then build the sandbox image:
+6. Start Docker Desktop with the Linux container engine, then build the sandbox image:
     docker build -t cloudproject-sandbox:dev docker/sandbox
 
    Build before starting the gateway. Dry runs use --pull=never so downloading an
@@ -103,6 +106,23 @@ image URI in a hardened Kubernetes Job. The Job must reproduce the runtime
 protections, disable payload retries, and clean up after completion. EKS routing
 and IAM retry handling remain separate implementation work; building this image
 does not enable cloud bursting.
+
+## Nginx
+You need Docker Desktop running and the sandbox image built (docker build -t cloudproject-sandbox:dev docker/sandbox).
+
+This is to set up and test Nginx. Make sure Nginx is already downloaded from the above SETUP steps.
+
+Run in three terminals (venv active, from the project folder)
+
+1. Terminal 1: `python -m src.sender.central_server`
+2. Terminal 2: `ppython -m src.endpoint.endpoint_app`
+3. Terminal 3: `python -m src.gateway.serve` (should print Gateway on http://127.0.0.1:8000 (8 threads, 4 sandbox slots, dashboard off)) 
+4. Terminal 4: Start NGINX (change file path accordingly). Windows: `FILE_PATH_TO\nginx.exe -p  YOUR_FILE_PATH_TO/Cloud-Project/nginx/" -c nginx.conf` or macOS/Linux: `nginx -p "$PWD/nginx/" -c nginx.conf`
+5. Terminal 5: `python -m scripts.check_nginx`. You should see 9 [PASS] lines and 9/9 checks passed. The headline one is “6 simultaneous slow payloads: 4 delivered, 2 rejected at stage ‘capacity’”.
+
+To send anything throught the Nginx at the start of the pipeline using CLI, `set GATEWAY_URL=http://127.0.0.1:8080/submit` in the `.env` file, then run `python -m src.sender.send src/examples/good.py`.
+
+To stop Nginx, simply run `FILE_PATH_TO\nginx.exe -p  YOUR_FILE_PATH_TO/Cloud-Project/nginx/" -c nginx.conf -s quit` for Windows or `nginx -p "$PWD/nginx/" -c nginx.conf -s quit` for macOS / Linux
 
 ## TESTS
 All tests (Docker Desktop must be running):   python -m pytest src/tests -v

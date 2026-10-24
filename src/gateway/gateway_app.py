@@ -146,7 +146,8 @@ def tracked_submission(body, name="CLI submission.py", scenario="external"):
     return response, status, event
 
 
-register_dashboard(app, sys.modules[__name__])
+if os.environ.get("DASHBOARD_ENABLED", "1") == "1":
+    register_dashboard(app, sys.modules[__name__])
 
 
 @app.errorhandler(413)
