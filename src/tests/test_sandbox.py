@@ -66,3 +66,9 @@ def test_cannot_write_filesystem():
     # The container filesystem is read-only, so writing a file must fail
     result = dry_run(b"open('/tmp/evil.txt', 'w').write('x')")
     assert result["status"] == "error"
+
+
+def test_container_output_is_bounded():
+    result = dry_run(b"print('x' * 100000)")
+    assert result["status"] == "OK"
+    assert len(result["stdout"].encode("utf-8")) == 64 * 1024

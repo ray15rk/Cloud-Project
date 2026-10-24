@@ -5,6 +5,14 @@
 Start Docker Desktop. Stop any old gateway, endpoint, and central server processes
 with Ctrl+C, then run this single command from the project directory:
 
+On macOS:
+
+```sh
+.venv/bin/python -m src.dashboard
+```
+
+On Windows:
+
 ```powershell
 .\.venv\Scripts\python.exe -m src.dashboard
 ```
@@ -22,7 +30,8 @@ and sender CLI still work; gateway submissions also appear in dashboard history.
 The operator dashboard is restricted to localhost. Signing happens on the server;
 the shared HMAC secret is never sent to the browser. Only run scripts you trust,
 since a successful dry run forwards the original script for real endpoint
-execution. EKS is visibly disconnected; no cloud execution is simulated.
+execution. Cloud overflow is available when `EKS_ENABLED=true` and the EKS
+settings below are configured.
 
 Activity metadata and bounded endpoint output are saved in
 `.data/activity.sqlite3` (gitignored). The latest 100 records are displayed and
@@ -80,14 +89,15 @@ otherwise absolute imports like `from src.sandbox.sandbox import dry_run` fail w
 ## SANDBOX IMAGE
 
 The image in docker/sandbox/Dockerfile contains the Python 3.11 runtime and runs
-as UID/GID 65534. Its default command executes /sandbox/script.py. The gateway
+as UID/GID 65534. Its built-in runner executes /sandbox/script.py with a
+10-second script deadline and a 64 KiB combined output cap. The gateway
 mounts each verified payload there read-only; payloads and shared secrets are
 not included in the image. The build context is limited to docker/sandbox.
 
 The local runner still applies memory and CPU limits, network isolation, a
 read-only filesystem, dropped capabilities, no-new-privileges, a PID limit,
-and a 10-second execution deadline. These are runtime settings, not protections
-that a Dockerfile alone can enforce.
+and a 10-second outer execution deadline. The in-container runner adds its own
+deadline for EKS Jobs, where the local Docker client timeout is unavailable.
 
 After building, check the image and then run the existing tests:
 
@@ -101,26 +111,31 @@ The image user should be 65534:65534, tests should pass, and no sandbox containe
 should remain. If python opens the Microsoft Store, use py to create the virtual
 environment, then use .\.venv\Scripts\python.exe for subsequent Python commands.
 
-For the next milestone, tag and push this same image to ECR, then use that ECR
-image URI in a hardened Kubernetes Job. The Job must reproduce the runtime
-protections, disable payload retries, and clean up after completion. EKS routing
-and IAM retry handling remain separate implementation work; building this image
-does not enable cloud bursting.
+The EKS image has been published to ECR, and the gateway can run overflow dry
+runs as hardened Kubernetes Jobs. See [EKS team handoff](docs/eks-team-handoff.md)
+for the architecture and options for teammates, and
+[deployment notes](infra/eks/README.md) for this Learner Lab environment.
 
 ## Nginx
 You need Docker Desktop running and the sandbox image built (docker build -t cloudproject-sandbox:dev docker/sandbox).
 
 This is to set up and test Nginx. Make sure Nginx is already downloaded from the above SETUP steps.
 
-Run in three terminals (venv active, from the project folder)
+Run in five terminals (venv active, from the project folder). For the original
+Nginx checks, start the gateway with `EKS_ENABLED=false`; those checks expect
+overflow to return HTTP 503. To test EKS overflow through Nginx, leave
+`EKS_ENABLED=true` and use the sender CLI instead.
 
 1. Terminal 1: `python -m src.sender.central_server`
-2. Terminal 2: `ppython -m src.endpoint.endpoint_app`
+2. Terminal 2: `python -m src.endpoint.endpoint_app`
 3. Terminal 3: `python -m src.gateway.serve` (should print Gateway on http://127.0.0.1:8000 (8 threads, 4 sandbox slots, dashboard off)) 
 4. Terminal 4: Start NGINX (change file path accordingly). Windows: `FILE_PATH_TO\nginx.exe -p  YOUR_FILE_PATH_TO/Cloud-Project/nginx/" -c nginx.conf` or macOS/Linux: `nginx -p "$PWD/nginx/" -c nginx.conf`
 5. Terminal 5: `python -m scripts.check_nginx`. You should see 9 [PASS] lines and 9/9 checks passed. The headline one is “6 simultaneous slow payloads: 4 delivered, 2 rejected at stage ‘capacity’”.
 
-To send anything throught the Nginx at the start of the pipeline using CLI, `set GATEWAY_URL=http://127.0.0.1:8080/submit` in the `.env` file, then run `python -m src.sender.send src/examples/good.py`.
+To send through Nginx, set `GATEWAY_URL=http://127.0.0.1:8080/submit` in
+`.env`, then run `python -m src.sender.send src/examples/good.py`. Nginx
+proxies both `POST /submit` and the read-only `/submissions/<id>` status URL,
+so the CLI can poll EKS results without exposing the dashboard.
 
 To stop Nginx, simply run `FILE_PATH_TO\nginx.exe -p  YOUR_FILE_PATH_TO/Cloud-Project/nginx/" -c nginx.conf -s quit` for Windows or `nginx -p "$PWD/nginx/" -c nginx.conf -s quit` for macOS / Linux
 
@@ -188,13 +203,32 @@ Each send.py call prints the HTTP status and the gateway's JSON response - check
 the status code AND the "stage"/"reason" fields match what's expected above, not just
 that it didn't crash.
 
-## NOTES
-- For the next project phase, follow [AWS Learner Lab setup](docs/aws-setup.md).
-- EKS cloud-burst path — resource manager currently fails closed (drops the
-  payload, HTTP 503 stage "capacity") rather than bursting, since no cluster
-  exists yet. Needs, in order: (1) EKS + ECR provisioning and moving the
-  sandbox's hardening flags into a Job spec, (2) replacing the fail-closed
-  branch in gateway_app.py with real Job submission + retry/backoff for IAM
-  propagation delay (Section 5.3), (3) re-running the "3 scripts, 2 fit
-  locally" scenario against a real cluster, (4) deciding whether
-  ResourceManager needs EKS-side capacity awareness too, not just local.
+## EKS overflow on macOS
+
+See [the live EKS deployment guide](infra/eks/README.md) for the cluster and
+image identifiers. In your gitignored `.env`, set `LOCAL_MEMORY_BUDGET_MB=256`,
+`EKS_ENABLED=true`, `EKS_CONTEXT=cloudproject-sandbox-lab`, and `EKS_IMAGE` to
+the immutable ECR image URI shown there. Run the dashboard with
+`.venv/bin/python -m src.dashboard`. The AWS CLI credentials in
+`~/.aws/credentials` must still be valid, and the cluster API allowlist must
+include your current public IP.
+
+Local submissions finish synchronously. Verified overflow submissions return
+HTTP 202 with a `submission_id` and `status_url`. The sender CLI and dashboard
+poll the status URL until the EKS dry run and endpoint delivery finish. The
+gateway keeps at most three outstanding cloud submissions by default; set
+`EKS_MAX_INFLIGHT` to change that bound. Pending payloads are stored temporarily
+in a gitignored SQLite file with owner-only permissions and removed at terminal
+status. A failed or uncertain endpoint forwarding attempt is never retried
+automatically.
+
+The endpoint executes the forwarded script directly on its host. Only the
+dry run is isolated in EKS. Node autoscaling is currently off by operator
+choice; the managed node group stays at one node until manually resized.
+
+This is a hybrid local/cloud demonstration. The gateway, dashboard, central
+server, and final endpoint run on the Mac at `127.0.0.1`; they are not hosted
+in EKS. Teammates can run the local-only mode from a clone. Using this EKS
+cluster from another machine requires separate AWS/Kubernetes authorization
+and network access; a teammate with a different Learner Lab account needs
+their own cluster and ECR image.

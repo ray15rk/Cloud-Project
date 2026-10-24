@@ -126,6 +126,7 @@ function duration(milliseconds) {
 }
 
 function outcome(event) {
+  if (event.status_code === 202) return { label: "Running", style: "running" };
   if (event.response.delivered) return { label: "Delivered", style: "success" };
   if (event.status_code >= 500 && event.response.stage !== "capacity") return { label: "Failed", style: "error" };
   return { label: "Blocked", style: "failure" };
@@ -139,9 +140,9 @@ function renderTrace(attempts) {
   $("#trace-badge").className = `badge ${status.style}`;
   $("#trace-intro").textContent = `${last.name} · HTTP ${last.status_code}${attempts.length > 1 ? ` · ${attempts.length} attempts` : ""}`;
   const order = ["verify", "capacity", "dry_run", "forward"];
-  const failedIndex = response.delivered ? 4 : order.indexOf(response.stage);
+  const failedIndex = last.status_code === 202 ? -1 : response.delivered ? 4 : order.indexOf(response.stage);
   $$(".pipeline-stages li").forEach((item, index) => {
-    item.className = index < failedIndex ? "passed" : index === failedIndex ? "failed" : "skipped";
+    item.className = last.status_code === 202 ? (index === 0 ? "passed" : "") : index < failedIndex ? "passed" : index === failedIndex ? "failed" : "skipped";
     const timing = response.timings_ms?.[`${item.dataset.stage}_ms`];
     item.querySelector(".stage-time").textContent = timing !== undefined ? duration(timing) : index < failedIndex ? "Passed" : index === failedIndex ? "Stopped" : "Skipped";
   });
@@ -151,7 +152,23 @@ function renderTrace(attempts) {
     const output = result.endpoint_response?.stdout || result.reason || "Execution completed without output.";
     return `${label}\n${output}${attempt.journal_error ? `\n${attempt.journal_error}` : ""}`;
   }).join("\n\n");
-  $("#trace-footnote").textContent = `Completed in ${duration(attempts.reduce((sum, item) => sum + item.duration_ms, 0))} · Original payload ${response.delivered ? "delivered" : "not delivered on this attempt"}`;
+  $("#trace-footnote").textContent = last.status_code === 202 ? "Cloud execution is still running. Keep this page open for the final result." : `Completed in ${duration(attempts.reduce((sum, item) => sum + item.duration_ms, 0))} · Original payload ${response.delivered ? "delivered" : "not delivered on this attempt"}`;
+}
+
+async function awaitCloud(attempts) {
+  const deadline = Date.now() + 360000;
+  while (attempts.some((item) => item.status_code === 202) && Date.now() < deadline) {
+    renderTrace(attempts);
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    for (const item of attempts.filter((entry) => entry.status_code === 202)) {
+      const status = await api(item.response.status_url);
+      if (status.state === "finished" || status.state === "ambiguous") {
+        item.status_code = status.status_code;
+        item.response = status.response;
+      }
+    }
+  }
+  return attempts;
 }
 
 function setBusy(busy) {
@@ -180,10 +197,11 @@ async function runPipeline(capacity = false) {
     const data = await api(capacity ? "/api/capacity-test" : "/api/run", {
       method: "POST", body: JSON.stringify(capacity ? {} : { code, mode: state.mode, name: $("#filename").value || "untitled.py" })
     });
+    await awaitCloud(data.attempts);
     renderTrace(data.attempts);
     if (capacity) {
       const rejected = data.attempts.filter((item) => item.response.stage === "capacity").length;
-      toast(`Capacity test: ${data.submitted} submitted, ${rejected} rejected at local capacity.`);
+      toast(`Capacity test: ${data.submitted} submitted, ${rejected} rejected at capacity.`);
     } else toast(data.attempts.length > 1 ? "Replay test completed. Check both attempts below." : "Pipeline run completed. Results are ready.");
     if (data.attempts.some((entry) => entry.journal_error)) toast("Execution finished, but activity could not be saved. Check the gateway terminal.", true);
   } catch (error) {
@@ -278,6 +296,12 @@ async function refreshHealth(force = false) {
   $("#refresh-health .icon").classList.add("spinning");
   try {
     const services = await api(force ? "/api/health?refresh=1" : "/api/health");
+    const cloudCard = $(".cloud-card");
+    const cloudStatus = services.eks?.status || "unknown";
+    cloudCard.querySelector(".badge").textContent = cloudStatus.replaceAll("_", " ");
+    cloudCard.querySelector(".badge").className = `badge ${cloudStatus === "online" ? "success" : "amber"}`;
+    cloudCard.querySelector("p").textContent = cloudStatus === "online" ? "Cloud overflow is ready. Verified submissions use EKS when local sandbox slots are full." : cloudStatus === "disabled" ? "Cloud overflow is disabled in gateway configuration." : "Cloud overflow is currently unavailable. Check EKS credentials, context, and image settings.";
+    cloudCard.querySelector(".cloud-note").textContent = cloudStatus === "online" ? "Overflow submissions receive HTTP 202 and can be tracked to a final result. Node autoscaling is off." : "Submissions that cannot use local capacity are rejected with HTTP 503.";
     const labels = { gateway: ["API gateway", "Verification, routing & delivery"], docker: ["Docker engine", "Linux container runtime"], image: ["Sandbox image", services.image?.name || "Runtime image"], endpoint: ["Endpoint device", "Original payload execution"], central: ["Central server", "Failure notification inbox"], eks: ["AWS EKS", "Cloud overflow execution"] };
     $("#service-list").replaceChildren(...Object.entries(labels).map(([key, [name, description]]) => {
       const service = services[key] || { status: "unknown" };

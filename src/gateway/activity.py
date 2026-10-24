@@ -31,7 +31,11 @@ class ActivityStore:
                     response["endpoint_response"][key] = value[:16000] + "\n[output truncated]"
         event = {**event, "response": response}
         with closing(self._connect()) as db, db:
-            db.execute("INSERT INTO activity VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (
+            db.execute("""INSERT INTO activity VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                status_code=excluded.status_code, delivered=excluded.delivered,
+                stage=excluded.stage, duration_ms=excluded.duration_ms,
+                response_json=excluded.response_json""", (
                 event["id"], event["name"], event["scenario"], event["created_at"],
                 event["status_code"], int(response.get("delivered", False)),
                 response.get("stage", "delivered"), event["duration_ms"], json.dumps(response),
@@ -45,9 +49,10 @@ class ActivityStore:
         with closing(self._connect()) as db, db:
             stats = dict(db.execute("""SELECT COUNT(*) AS total,
                 COALESCE(SUM(delivered), 0) AS delivered,
+                COALESCE(SUM(CASE WHEN status_code = 202 THEN 1 ELSE 0 END), 0) AS pending,
                 COALESCE(AVG(duration_ms), 0) AS average_ms FROM activity""").fetchone())
             rows = db.execute("SELECT * FROM activity ORDER BY created_at DESC LIMIT 100").fetchall()
-        stats["blocked"] = stats["total"] - stats["delivered"]
+        stats["blocked"] = stats["total"] - stats["delivered"] - stats["pending"]
         stats["average_ms"] = round(stats["average_ms"], 2)
         events = [{"id": row["id"], "name": row["name"], "scenario": row["scenario"],
                    "created_at": row["created_at"], "status_code": row["status_code"],

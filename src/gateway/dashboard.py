@@ -61,7 +61,7 @@ def register_dashboard(app, gateway):
             app.logger.exception("Activity journal unavailable")
             return jsonify(error="Activity journal unavailable. Check the gateway terminal."), 503
         return jsonify(**snapshot, resources=gateway.resource_manager.snapshot(),
-                       cloud={"available": False, "label": "EKS not connected"}, configured=bool(gateway.SHARED_SECRET))
+                       cloud={"enabled": gateway.EKS_ENABLED}, configured=bool(gateway.SHARED_SECRET))
 
     @bp.get("/api/examples")
     def examples():
@@ -154,7 +154,13 @@ def register_dashboard(app, gateway):
                     services["image"]["status"] = "ready" if inspected.returncode == 0 else "missing"
             except (OSError, subprocess.TimeoutExpired):
                 services["docker"] = {"status": "offline"}
-            services["eks"] = {"status": "not_connected"}
+            if not gateway.EKS_ENABLED:
+                services["eks"] = {"status": "disabled"}
+            else:
+                try:
+                    services["eks"] = {"status": "online" if gateway.configured_runner().healthy() else "unavailable"}
+                except Exception:
+                    services["eks"] = {"status": "unavailable"}
             health_cache.update(checked=time.monotonic(), value=services)
             return jsonify(services)
 

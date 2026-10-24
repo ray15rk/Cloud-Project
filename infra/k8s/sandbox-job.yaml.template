@@ -1,0 +1,57 @@
+# The gateway replaces JOB_NAME, CONFIGMAP_NAME, and IMAGE_DIGEST.
+# IMAGE_DIGEST must be a full ECR URI ending in @sha256:...
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: JOB_NAME
+  namespace: cloudproject-sandbox
+  labels:
+    app: cloudproject-sandbox
+spec:
+  completions: 1
+  parallelism: 1
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app: cloudproject-sandbox
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      nodeSelector:
+        workload: cloudproject-sandbox
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: sandbox
+          image: IMAGE_DIGEST
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              cpu: 500m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: script
+              mountPath: /sandbox/script.py
+              subPath: script.py
+              readOnly: true
+      volumes:
+        - name: script
+          configMap:
+            name: CONFIGMAP_NAME
+            defaultMode: 0444

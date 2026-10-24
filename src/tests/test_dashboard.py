@@ -12,6 +12,7 @@ from src.watchdog.verifier import NonceStore
 @pytest.fixture
 def operator(monkeypatch, tmp_path):
     monkeypatch.setattr(gw, "SHARED_SECRET", b"dashboard-test-private-secret")
+    monkeypatch.setattr(gw, "EKS_ENABLED", False)
     monkeypatch.setattr(gw, "nonce_store", NonceStore())
     monkeypatch.setattr(gw, "resource_manager", ResourceManager())
     monkeypatch.setattr(gw, "activity_store", ActivityStore(tmp_path / "activity.sqlite3"))
@@ -201,4 +202,4 @@ def test_health_checks_report_actual_dependencies(operator, monkeypatch):
     assert health["docker"]["status"] == "online"
     assert health["image"]["status"] == "ready"
     assert health["endpoint"]["status"] == "online"
-    assert health["eks"]["status"] == "not_connected"
+    assert health["eks"]["status"] == "disabled"

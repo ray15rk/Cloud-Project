@@ -5,6 +5,8 @@ import argparse
 import base64
 import json
 import os
+import time
+from urllib.parse import urljoin
  
 import requests
 from dotenv import load_dotenv
@@ -45,6 +47,20 @@ def main():
         resp = requests.post(GATEWAY_URL, json=body, timeout=60)
         print(f"--- attempt {attempt + 1}: HTTP {resp.status_code}")
         print(json.dumps(resp.json(), indent=2))
+        if resp.status_code == 202:
+            status_url = urljoin(GATEWAY_URL, resp.json()["status_url"])
+            deadline = time.monotonic() + 360
+            while time.monotonic() < deadline:
+                time.sleep(2)
+                status = requests.get(status_url, timeout=15)
+                status.raise_for_status()
+                if status.status_code != 202:
+                    result = status.json()
+                    print(f"--- final: HTTP {result['status_code']}")
+                    print(json.dumps(result, indent=2))
+                    break
+            else:
+                print(f"Cloud submission is still pending. Check {status_url} later.")
  
  
 if __name__ == "__main__":

@@ -8,9 +8,10 @@ CONF = (Path(__file__).resolve().parents[2] / "nginx" / "nginx.conf").read_text(
 CODE = re.sub(r"#.*", "", CONF)  # ignore comments
 
 
-def test_only_one_route_is_proxied_and_it_is_an_exact_match():
-    assert len(re.findall(r"\bproxy_pass\b", CODE)) == 1
+def test_only_submission_and_status_routes_are_proxied():
+    assert len(re.findall(r"\bproxy_pass\b", CODE)) == 2
     assert re.search(r"location\s*=\s*/submit\s*\{", CODE)
+    assert re.search(r"location\s+\^~\s+/submissions/\s*\{\s*limit_except\s+GET\s*\{\s*deny all;", CODE)
 
 
 def test_everything_else_is_404():
