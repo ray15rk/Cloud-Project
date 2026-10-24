@@ -36,8 +36,10 @@ durable, capped local SQLite queue submits a disposable EKS Job, then forwards
 the **original verified bytes** to the local endpoint only after the dry run
 succeeds. The sender CLI and dashboard poll for the final result. The default
 cap is three outstanding cloud submissions. The namespace also has a Kubernetes
-ResourceQuota. Node autoscaling is off; the node group has one desired node and
-a maximum of two.
+ResourceQuota. An optional local node scaler watches resource-pending sandbox
+Pods and adjusts the node group between one and two nodes. It stops when the
+gateway stops or AWS lab credentials expire. Kubernetes Cluster Autoscaler is
+unavailable because the lab denies the dedicated IAM role it needs.
 
 ## What was proved
 
@@ -47,8 +49,16 @@ a maximum of two.
 - A four-probe capacity test put two dry runs in local Docker and two in EKS;
   all four successful scripts were delivered. Job names and timing data are in
   the dashboard activity journal.
+- A separate three-submission signed probe put exactly two dry runs in local
+  Docker and one in EKS; all three reached the local endpoint.
+- With both local slots occupied, an EKS infinite-loop dry run timed out and
+  was blocked before forwarding (HTTP 422), while both local runs succeeded.
+- A resource scheduling probe requested a second node: the second worker
+  reached Ready, and a pending Pod moved onto it. A third probe remained
+  pending at the two-node cap. The labeled probe Pods were deleted afterward,
+  and the operator-side scaler requested the return to one desired node.
 - Kubernetes Jobs, Pods, and payload ConfigMaps created for these tests were
-  cleaned up. The full repository test suite passed: 69 tests.
+  cleaned up. The full repository test suite passed: 85 tests.
 
 These results prove the configured environment worked at test time. They do
 not make the application production ready. The endpoint executes scripts on

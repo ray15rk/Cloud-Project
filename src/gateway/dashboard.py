@@ -63,6 +63,16 @@ def register_dashboard(app, gateway):
         return jsonify(**snapshot, resources=gateway.resource_manager.snapshot(),
                        cloud={"enabled": gateway.EKS_ENABLED}, configured=bool(gateway.SHARED_SECRET))
 
+    @bp.get("/api/metrics")
+    def metrics():
+        try:
+            return jsonify(**gateway.activity_store.metrics(),
+                           local_slots=gateway.resource_manager.snapshot()["slots"],
+                           cloud_limit=gateway.cloud_store.max_inflight)
+        except Exception:
+            app.logger.exception("Pipeline metrics unavailable")
+            return jsonify(error="Pipeline metrics unavailable."), 503
+
     @bp.get("/api/examples")
     def examples():
         root = Path(__file__).resolve().parents[1] / "examples"
@@ -161,6 +171,7 @@ def register_dashboard(app, gateway):
                     services["eks"] = {"status": "online" if gateway.configured_runner().healthy() else "unavailable"}
                 except Exception:
                     services["eks"] = {"status": "unavailable"}
+            services["node_scaler"] = gateway.node_scaler.status() if gateway.node_scaler else {"state": "disabled", "desired": None}
             health_cache.update(checked=time.monotonic(), value=services)
             return jsonify(services)
 

@@ -22,6 +22,7 @@ from src.resource_manager.resource_manager import resource_manager
 from src.gateway.activity import ActivityStore
 from src.gateway.cloud_submissions import CloudCapacityError, CloudSubmissionStore
 from src.gateway.cloud_worker import CloudWorker
+from src.gateway.node_scaler import NodeScaler
 from src.gateway.dashboard import register_dashboard
 
 load_dotenv()  # Reads SHARED_SECRET etc.
@@ -30,6 +31,7 @@ SHARED_SECRET = os.environ.get("SHARED_SECRET", "").encode("utf-8")
 ENDPOINT_URL = os.environ.get("ENDPOINT_URL", "http://127.0.0.1:5000/execute")
 NOTIFY_URL = os.environ.get("NOTIFY_URL", "")  # Central server's failure inbox
 EKS_ENABLED = os.environ.get("EKS_ENABLED", "false").lower() == "true"
+EKS_NODE_SCALING_ENABLED = EKS_ENABLED and os.environ.get("EKS_NODE_SCALING_ENABLED", "false").lower() == "true"
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 256 * 1024
@@ -188,6 +190,13 @@ def tracked_submission(body, name="CLI submission.py", scenario="external"):
 
 
 cloud_worker = CloudWorker(cloud_store, activity_store, configured_runner, notify_failure, ENDPOINT_URL)
+node_scaler = NodeScaler(
+    cluster=os.environ.get("EKS_CLUSTER", "cloudproject-sandbox-lab"),
+    nodegroup=os.environ.get("EKS_NODEGROUP", "sandbox-workers"),
+    context=os.environ.get("EKS_CONTEXT", "cloudproject-sandbox-lab"),
+    region=os.environ.get("AWS_REGION", "us-east-1"),
+    idle_seconds=int(os.environ.get("EKS_NODE_IDLE_SECONDS", "300")),
+) if EKS_NODE_SCALING_ENABLED else None
 
 
 if os.environ.get("DASHBOARD_ENABLED", "1") == "1":
@@ -198,6 +207,8 @@ if os.environ.get("DASHBOARD_ENABLED", "1") == "1":
 def ensure_cloud_worker():
     if EKS_ENABLED:
         cloud_worker.start()
+    if EKS_ENABLED and node_scaler:
+        node_scaler.start()
 
 
 @app.errorhandler(413)
@@ -229,4 +240,6 @@ if __name__ == "__main__":
         raise SystemExit("SHARED_SECRET is not set. Copy .env.example to .env and fill it in.")
     if EKS_ENABLED:
         cloud_worker.start()
+    if node_scaler:
+        node_scaler.start()
     app.run(port=8000)

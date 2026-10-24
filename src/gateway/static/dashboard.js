@@ -70,7 +70,7 @@ function setView(view) {
   $("#sidebar").classList.remove("open");
   $("#menu-button").setAttribute("aria-expanded", "false");
   history.replaceState(null, "", `#${view}`);
-  if (view === "system") refreshHealth();
+  if (view === "system") { refreshHealth(); refreshMetrics(); }
   window.scrollTo({ top: 0, behavior: "auto" });
 }
 
@@ -301,7 +301,8 @@ async function refreshHealth(force = false) {
     cloudCard.querySelector(".badge").textContent = cloudStatus.replaceAll("_", " ");
     cloudCard.querySelector(".badge").className = `badge ${cloudStatus === "online" ? "success" : "amber"}`;
     cloudCard.querySelector("p").textContent = cloudStatus === "online" ? "Cloud overflow is ready. Verified submissions use EKS when local sandbox slots are full." : cloudStatus === "disabled" ? "Cloud overflow is disabled in gateway configuration." : "Cloud overflow is currently unavailable. Check EKS credentials, context, and image settings.";
-    cloudCard.querySelector(".cloud-note").textContent = cloudStatus === "online" ? "Overflow submissions receive HTTP 202 and can be tracked to a final result. Node autoscaling is off." : "Submissions that cannot use local capacity are rejected with HTTP 503.";
+    const scaler = services.node_scaler || { state: "disabled" };
+    cloudCard.querySelector(".cloud-note").textContent = cloudStatus === "online" ? `Overflow submissions receive HTTP 202. Operator-side node scaling: ${scaler.state}${scaler.desired ? ` (${scaler.desired} desired node${scaler.desired === 1 ? "" : "s"})` : ""}.` : "Submissions that cannot use local capacity are rejected with HTTP 503.";
     const labels = { gateway: ["API gateway", "Verification, routing & delivery"], docker: ["Docker engine", "Linux container runtime"], image: ["Sandbox image", services.image?.name || "Runtime image"], endpoint: ["Endpoint device", "Original payload execution"], central: ["Central server", "Failure notification inbox"], eks: ["AWS EKS", "Cloud overflow execution"] };
     $("#service-list").replaceChildren(...Object.entries(labels).map(([key, [name, description]]) => {
       const service = services[key] || { status: "unknown" };
@@ -313,6 +314,62 @@ async function refreshHealth(force = false) {
     }));
   } catch (error) { $("#service-list").textContent = error.message; }
   finally { $("#refresh-health .icon").classList.remove("spinning"); }
+}
+
+function metricRow(label, value, maximum, detail) {
+  const row = element("div", "metric-row");
+  const heading = element("div", "metric-row-heading");
+  heading.append(element("span", "", label), element("strong", "", detail));
+  const track = element("div", "metric-track");
+  const fill = element("div", "metric-fill");
+  fill.style.width = `${maximum ? Math.max(0, Math.min(100, value / maximum * 100)) : 0}%`;
+  track.append(fill);
+  row.append(heading, track);
+  return row;
+}
+
+async function refreshMetrics() {
+  try {
+    const data = await api("/api/metrics");
+    const buckets = data.throughput || [];
+    const maximum = Math.max(1, ...buckets.map((bucket) => bucket.count));
+    $("#throughput-chart").replaceChildren(...buckets.map((bucket) => {
+      const bar = element("div", "throughput-bar");
+      bar.style.height = `${Math.max(3, bucket.count / maximum * 100)}%`;
+      const second = new Date(bucket.start * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      bar.title = `${second}: ${bucket.count} submission${bucket.count === 1 ? "" : "s"}`;
+      bar.setAttribute("aria-label", bar.title);
+      return bar;
+    }));
+    $("#throughput-summary").textContent = `${data.submissions_per_second.toFixed(3)} submissions/s average · ${data.peak_per_second} peak in one second`;
+    const local = data.locations.local;
+    const eks = data.locations.eks;
+    const total = local.count + eks.count + data.capacity_rejected;
+    $("#capacity-chart").replaceChildren(
+      metricRow("Local", local.count, total, `${local.count} / ${data.local_slots} slots`),
+      metricRow("EKS", eks.count, total, `${eks.count} / ${data.cloud_limit} concurrent`),
+      metricRow("Rejected at capacity", data.capacity_rejected, total, `${data.capacity_rejected}`)
+    );
+    $("#capacity-caption").textContent = `${total} final submissions in the last hour; bars show the split, while slot labels show configured concurrency.`;
+    const stages = [["verify_ms", "Verification"], ["dry_run_ms", "Dry run"], ["forward_ms", "Forwarding"]];
+    const allLatencies = stages.flatMap(([key]) => [local[`avg_${key}`], eks[`avg_${key}`]]);
+    const maxLatency = Math.max(1, ...allLatencies);
+    $("#latency-chart").replaceChildren(...stages.flatMap(([key, name]) => [
+      metricRow(`Local ${name}`, local[`avg_${key}`], maxLatency, `${local[`avg_${key}`]} ms`),
+      metricRow(`EKS ${name}`, eks[`avg_${key}`], maxLatency, `${eks[`avg_${key}`]} ms`)
+    ]));
+    const maxFailures = Math.max(1, local.dry_run_failures, eks.dry_run_failures);
+    $("#failure-chart").replaceChildren(
+      metricRow("Local dry-run blocked", local.dry_run_failures, maxFailures, String(local.dry_run_failures)),
+      metricRow("EKS dry-run blocked", eks.dry_run_failures, maxFailures, String(eks.dry_run_failures))
+    );
+    $("#failure-summary").textContent = `Failure isolation: ${eks.dry_run_failures} EKS dry-run failures, ${local.dry_run_failures} local dry-run failures; ${local.delivered + eks.delivered} successful deliveries.`;
+  } catch (error) {
+    $("#throughput-chart").textContent = error.message;
+    $("#capacity-chart").textContent = "Metrics unavailable.";
+    $("#latency-chart").textContent = "Metrics unavailable.";
+    $("#failure-chart").textContent = "Metrics unavailable.";
+  }
 }
 
 function exportCsv() {
@@ -383,7 +440,7 @@ async function init() {
   } catch (error) { toast(error.message, true); }
   await refreshOverview(); refreshHealth();
   setInterval(() => { if (!document.hidden) refreshOverview(); }, 4000);
-  setInterval(() => { if (!document.hidden && document.body.dataset.view === "system") refreshHealth(); }, 15000);
+  setInterval(() => { if (!document.hidden && document.body.dataset.view === "system") { refreshHealth(); refreshMetrics(); } }, 15000);
 }
 
 init().catch((error) => toast(`Dashboard could not initialize: ${error.message}`, true));

@@ -29,9 +29,13 @@ aws eks list-nodegroups --region us-east-1 \
 The node launch template is `cloudproject-eks-nodes`. It requires IMDSv2 and
 sets the metadata response hop limit to one. The active managed node group uses
 one `t3.medium` node initially and a maximum of two. The node group limit alone
-does not provide demand-driven scaling. The operator chose to leave Cluster
-Autoscaler off. `autoscaler-node-policy.json` is a proposal and has **not**
-been attached to the shared node role.
+does not provide demand-driven scaling. The Learner Lab prevents creating the
+IAM role needed for Kubernetes Cluster Autoscaler, so the local gateway can run
+an operator-side scaler instead. It watches sandbox Pods for resource-related
+Unschedulable conditions, requests a second node, and returns to one after five
+idle minutes. It runs only while the dashboard/gateway and AWS credentials are
+active. `autoscaler-node-policy.json` remains a proposal and has **not** been
+attached to the shared node role.
 
 The Learner Lab identity cannot create a dedicated gateway IAM role. Its
 cluster-creator identity is being used for initial setup and smoke tests. Do not
@@ -53,6 +57,10 @@ EKS_ENABLED=true
 EKS_CONTEXT=cloudproject-sandbox-lab
 EKS_IMAGE=257465915306.dkr.ecr.us-east-1.amazonaws.com/cloudproject-sandbox@sha256:b83af745ca35080f205abcb1fe2a898973ec1d02817bc08e75733cbfda856230
 EKS_MAX_INFLIGHT=3
+EKS_NODE_SCALING_ENABLED=true
+EKS_CLUSTER=cloudproject-sandbox-lab
+EKS_NODEGROUP=sandbox-workers
+AWS_REGION=us-east-1
 ```
 
 Start Docker Desktop, then run `.venv/bin/python -m src.dashboard` from the
@@ -67,6 +75,14 @@ The cluster API allowlist contains the operator's public IP at creation time.
 If the Mac's public IP changes, update EKS public access CIDRs before running
 the gateway. The `voclabs` credentials expire and must be refreshed from the
 Learner Lab when authentication fails.
+
+Ordinary short scripts may finish before a Pod waits long enough to need a new
+node. To observe scaling, submit a bounded workload whose combined CPU requests
+exceed the first node's allocatable CPU and check the dashboard's System status
+or `aws eks describe-nodegroup`. The scaler leaves the managed node group's
+min/max at 1/2 and changes desired size only. If the gateway stops while two
+nodes are desired, restart it for automatic scale-down or manually set desired
+size to one after checking no sandbox workload is active.
 
 ## Cleanup
 

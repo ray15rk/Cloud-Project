@@ -223,8 +223,11 @@ status. A failed or uncertain endpoint forwarding attempt is never retried
 automatically.
 
 The endpoint executes the forwarded script directly on its host. Only the
-dry run is isolated in EKS. Node autoscaling is currently off by operator
-choice; the managed node group stays at one node until manually resized.
+dry run is isolated in EKS. In the Learner Lab, an optional gateway-side node
+scaler watches sandbox Pods for resource scheduling shortages and adjusts the
+managed node group between one and two nodes. It requires the local gateway
+and current AWS lab credentials to keep running; it is not Kubernetes Cluster
+Autoscaler. See [EKS deployment](infra/eks/README.md).
 
 This is a hybrid local/cloud demonstration. The gateway, dashboard, central
 server, and final endpoint run on the Mac at `127.0.0.1`; they are not hosted
