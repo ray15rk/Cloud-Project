@@ -1,0 +1,1 @@
+# keeps nginx/temp in git; NGINX fills it with scratch folders at runtime
