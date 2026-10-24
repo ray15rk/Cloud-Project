@@ -53,12 +53,16 @@ unavailable because the lab denies the dedicated IAM role it needs.
   Docker and one in EKS; all three reached the local endpoint.
 - With both local slots occupied, an EKS infinite-loop dry run timed out and
   was blocked before forwarding (HTTP 422), while both local runs succeeded.
+- A six-submission capacity probe produced two local successes, three EKS
+  successes, and one HTTP 503 capacity rejection. This confirms the configured
+  two local slots and three outstanding cloud submissions are enforced.
 - A resource scheduling probe requested a second node: the second worker
   reached Ready, and a pending Pod moved onto it. A third probe remained
   pending at the two-node cap. The labeled probe Pods were deleted afterward,
   and the operator-side scaler requested the return to one desired node.
 - Kubernetes Jobs, Pods, and payload ConfigMaps created for these tests were
-  cleaned up. The full repository test suite passed: 85 tests.
+  cleaned up. The full repository test suite passed: 92 tests after the latest
+  Nginx changes were merged.
 
 These results prove the configured environment worked at test time. They do
 not make the application production ready. The endpoint executes scripts on
