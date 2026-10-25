@@ -1,0 +1,1 @@
+# keeps nginx/logs in git; the log files themselves are gitignored
