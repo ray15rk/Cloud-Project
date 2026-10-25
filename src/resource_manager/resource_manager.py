@@ -1,8 +1,12 @@
 # Decide weather a payload's dry run can run locally before the dry run execution starts
 # NOTE: EKS bursting not implemented yet, so when local host at capacity, it fails closed rather than running over budget
 
+import os
 import threading
 from dataclasses import dataclass, field
+from dotenv import load_dotenv
+
+load_dotenv()
 
 def _parse_memory_limit(memory_limit: str) -> int:
     # Convert docker memory string (128m, 1g) into megabytes, so resource manager can work on it
@@ -53,4 +57,4 @@ class ResourceManager:
 
 # One instance shared across the whole process
 # Every request's admission decidion needs to see the same live counter
-resource_manager = ResourceManager()
+resource_manager = ResourceManager(total_memory_mb=int(os.environ.get("LOCAL_MEMORY_BUDGET_MB", "512")))

@@ -5,6 +5,8 @@ import argparse
 import base64
 import json
 import os
+import time
+from urllib.parse import urljoin
  
 import requests
 from dotenv import load_dotenv
@@ -59,7 +61,25 @@ def main():
             raise SystemExit(f"Submission failed ({type(error).__name__}). Execution outcome may be unknown; "
                              "check the gateway before resubmitting. No automatic retry was made.") from error
         print(f"--- attempt {attempt + 1}: HTTP {resp.status_code}")
-        print(json.dumps(response_body(resp), indent=2))
+        result = response_body(resp)
+        print(json.dumps(result, indent=2))
+        if resp.status_code == 202 and isinstance(result, dict) and result.get("status_url"):
+            status_url = urljoin(GATEWAY_URL, result["status_url"])
+            deadline = time.monotonic() + 360
+            while time.monotonic() < deadline:
+                time.sleep(2)
+                try:
+                    status = requests.get(status_url, timeout=CLIENT_TIMEOUT)
+                except requests.RequestException as error:
+                    raise SystemExit(f"Status check failed ({type(error).__name__}). Check {status_url} later; "
+                                     "the submission was not retried.") from error
+                if status.status_code != 202:
+                    final = response_body(status)
+                    print(f"--- final: HTTP {final.get('status_code', status.status_code)}")
+                    print(json.dumps(final, indent=2))
+                    break
+            else:
+                print(f"Cloud submission is still pending. Check {status_url} later.")
  
  
 if __name__ == "__main__":

@@ -25,7 +25,7 @@ def choose_threads(slots: int, requested: str | None) -> int:
 
 
 def main():
-    # The NGINX-fronted process serves /submit only. Set BEFORE importing gateway_app so the
+    # The NGINX-fronted process serves submissions and their status. Set BEFORE importing gateway_app so the
     # operator dashboard routes are never registered and cannot be exposed by a proxy mistake.
     os.environ.setdefault("DASHBOARD_ENABLED", "0")
 

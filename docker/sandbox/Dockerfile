@@ -13,11 +13,13 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /sandbox
+COPY --chmod=0444 runner.py /sandbox/runner.py
 USER 65534:65534
 
 # Payloads are mounted separately for each run, never baked into the image.
 # Isolated mode ignores user Python configuration; -B avoids bytecode writes.
-# ENTRYPOINT ["python", "-I", "-B", "-u"]
-# CMD ["/sandbox/script.py"]
+
 
 # ENTRYPOINT and CMD are intentionally removed as sandbox.py now dynamicall appends the correct binary
+# ENTRYPOINT ["python", "-I", "-B", "-u"]
+# CMD ["/sandbox/script.py"]

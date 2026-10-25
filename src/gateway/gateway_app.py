@@ -5,6 +5,7 @@
 import base64
 import binascii
 import os
+import sqlite3
 import time
 import sys
 import uuid
@@ -15,9 +16,13 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, request
  
 from src.sandbox.sandbox import dry_run
+from src.sandbox.eks_runner import configured_runner
 from src.watchdog.verifier import NonceStore, VerificationError, verify_payload
 from src.resource_manager.resource_manager import resource_manager
 from src.gateway.activity import ActivityStore
+from src.gateway.cloud_submissions import CloudCapacityError, CloudSubmissionStore
+from src.gateway.cloud_worker import CloudWorker
+from src.gateway.node_scaler import NodeScaler
 from src.gateway.dashboard import register_dashboard
 from src.ingress import ENDPOINT_TIMEOUT, NOTIFY_TIMEOUT
 
@@ -26,10 +31,14 @@ load_dotenv()  # Reads SHARED_SECRET etc.
 SHARED_SECRET = os.environ.get("SHARED_SECRET", "").encode("utf-8")
 ENDPOINT_URL = os.environ.get("ENDPOINT_URL", "http://127.0.0.1:5000/execute")
 NOTIFY_URL = os.environ.get("NOTIFY_URL", "")  # Central server's failure inbox
+EKS_ENABLED = os.environ.get("EKS_ENABLED", "false").lower() == "true"
+EKS_NODE_SCALING_ENABLED = EKS_ENABLED and os.environ.get("EKS_NODE_SCALING_ENABLED", "false").lower() == "true"
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 256 * 1024
 activity_store = ActivityStore(Path(__file__).resolve().parents[2] / ".data" / "activity.sqlite3")
+cloud_store = CloudSubmissionStore(Path(__file__).resolve().parents[2] / ".data" / "cloud_submissions.sqlite3",
+                                   max_inflight=int(os.environ.get("EKS_MAX_INFLIGHT", "3")))
  
 # One store shared by every request, so a nonce seen on one request is remembered for the next
 nonce_store = NonceStore()
@@ -49,7 +58,7 @@ def notify_failure(stage: str, reason: str, nonce: str | None) -> None:
 
 # For running the full pipeline. returns response_json & http_status
 # Kept separate from the Flask route so tests can call it directly
-def process_submission(body: dict) -> tuple[dict, int]:
+def process_submission(body: dict, submission_id=None, name="CLI submission.py", scenario="external") -> tuple[dict, int]:
     timings = {}
     nonce = body.get("nonce") if isinstance(body, dict) else None
  
@@ -90,15 +99,37 @@ def process_submission(body: dict) -> tuple[dict, int]:
     
     timings["verify_ms"] = round((time.perf_counter() - t) * 1000, 2)
 
-    # Stage 2a: capacity check that gates the dry run specifically, not the whole request
-    # NOTE: If the local host has no room, failed closed: EKS bursting not setup, drop it first rather than overcommit
+    # Stage 2a: capacity check that gates the dry run specifically.
     DRY_RUN_MEMORY_LIMIT = "128m"
-    if not resource_manager.try_admit(DRY_RUN_MEMORY_LIMIT):
+    local_admitted = resource_manager.try_admit(DRY_RUN_MEMORY_LIMIT)
+    if not local_admitted and not EKS_ENABLED:
         notify_failure("capacity", "local host at capacity", nonce)
         return {"delivered": False, "stage":"capacity", "reason":"local host at capacity", "timings_ms": timings}, 503
+
+    if not local_admitted:
+        submission_id = submission_id or uuid.uuid4().hex
+        try:
+            cloud_store.enqueue(submission_id, message["nonce"], payload, name, scenario, timings["verify_ms"])
+        except CloudCapacityError:
+            notify_failure("capacity", "EKS submission limit reached", nonce)
+            return {"delivered": False, "stage": "capacity", "reason": "EKS submission limit reached",
+                    "timings_ms": timings}, 503
+        except sqlite3.IntegrityError:
+            notify_failure("verify", "Replay detected", nonce)
+            return {"delivered": False, "stage": "verify", "reason": "Replay detected",
+                    "timings_ms": timings}, 401
+        except Exception:
+            app.logger.exception("Could not queue EKS submission")
+            notify_failure("capacity", "EKS queue unavailable", nonce)
+            return {"delivered": False, "stage": "capacity", "reason": "EKS queue unavailable",
+                    "timings_ms": timings}, 503
+        return {"delivered": False, "stage": "queued", "execution_location": "eks",
+                "submission_id": submission_id, "status_url": f"/submissions/{submission_id}",
+                "timings_ms": timings}, 202
  
     # Stage 2b: resource-bounded dry run. Since this is expensive, it only runs for legit payloads.
     t = time.perf_counter()
+    execution_location = "local"
     try:
         result = dry_run(payload, memory_limit=DRY_RUN_MEMORY_LIMIT, language=message["language"])
 
@@ -106,18 +137,23 @@ def process_submission(body: dict) -> tuple[dict, int]:
         # Fail closed: if the sandbox itself is broken (e.g. Docker not running), the payload is dropped, never forwarded untested
         print(f"[gateway] dry_run failed unexpectedly: {e}")
         timings["dry_run_ms"] = round((time.perf_counter() - t) * 1000, 2)
-        notify_failure("dry_run", f"sandbox unavailable: {e}", nonce)
-        return {"delivered": False, "stage": "dry_run", "reason": "sandbox unavailable", "timings_ms": timings}, 503
+        notify_failure("dry_run", f"{execution_location} sandbox unavailable: {e}", nonce)
+        return {"delivered": False, "stage": "dry_run", "reason": f"{execution_location} sandbox unavailable",
+                "execution_location": execution_location, "timings_ms": timings}, 503
     
     finally:
         # Container is gone by the time dry_run() returns = success, failure or exception. Release slot unconditioanlly
-        resource_manager.release(DRY_RUN_MEMORY_LIMIT)
+        if local_admitted:
+            resource_manager.release(DRY_RUN_MEMORY_LIMIT)
     timings["dry_run_ms"] = round((time.perf_counter() - t) * 1000, 2)
 
     if result["status"] != "OK":
         reason = f'{result["status"]}: {result.get("detail", "")}'.strip(": ")
         notify_failure("dry_run", reason, nonce)
-        return {"delivered": False, "stage": "dry_run", "reason": reason, "timings_ms": timings}, 422
+        status_code = 503 if result["status"] == "infrastructure_error" else 422
+        return {"delivered": False, "stage": "dry_run", "reason": reason,
+                "execution_location": execution_location, "job_name": result.get("job_name"),
+                "timings_ms": timings}, status_code
  
     # Stage 3: forward the ORIGINAL verified payload to the endpoint
     t = time.perf_counter()
@@ -133,16 +169,21 @@ def process_submission(body: dict) -> tuple[dict, int]:
     except (requests.RequestException, ValueError) as e:
         timings["forward_ms"] = round((time.perf_counter() - t) * 1000, 2)
         notify_failure("forward", f"endpoint unreachable: {e}", nonce)
-        return {"delivered": False, "stage": "forward", "reason": "endpoint unreachable", "timings_ms": timings}, 502
+        return {"delivered": False, "stage": "forward", "reason": "endpoint unreachable",
+                "execution_location": execution_location, "job_name": result.get("job_name"),
+                "timings_ms": timings}, 502
     timings["forward_ms"] = round((time.perf_counter() - t) * 1000, 2)
  
-    return {"delivered": True, "endpoint_response": endpoint_response, "timings_ms": timings}, 200
+    return {"delivered": True, "endpoint_response": endpoint_response,
+            "execution_location": execution_location, "job_name": result.get("job_name"),
+            "timings_ms": timings}, 200
 
 
 def tracked_submission(body, name="CLI submission.py", scenario="external"):
     started = time.perf_counter()
-    response, status = process_submission(body)
-    event = {"id": uuid.uuid4().hex, "name": name, "scenario": scenario,
+    submission_id = uuid.uuid4().hex
+    response, status = process_submission(body, submission_id, name, scenario)
+    event = {"id": submission_id, "name": name, "scenario": scenario,
              "created_at": time.time(), "status_code": status,
              "duration_ms": round((time.perf_counter() - started) * 1000, 2), "response": response}
     try:
@@ -150,11 +191,31 @@ def tracked_submission(body, name="CLI submission.py", scenario="external"):
     except Exception:
         app.logger.exception("Could not save pipeline activity")
         event["journal_error"] = "Result could not be saved to activity history."
+    if status == 202:
+        cloud_worker.start()
     return response, status, event
+
+
+cloud_worker = CloudWorker(cloud_store, activity_store, configured_runner, notify_failure, ENDPOINT_URL)
+node_scaler = NodeScaler(
+    cluster=os.environ.get("EKS_CLUSTER", "cloudproject-sandbox-lab"),
+    nodegroup=os.environ.get("EKS_NODEGROUP", "sandbox-workers"),
+    context=os.environ.get("EKS_CONTEXT", "cloudproject-sandbox-lab"),
+    region=os.environ.get("AWS_REGION", "us-east-1"),
+    idle_seconds=int(os.environ.get("EKS_NODE_IDLE_SECONDS", "300")),
+) if EKS_NODE_SCALING_ENABLED else None
 
 
 if os.environ.get("DASHBOARD_ENABLED", "1") == "1":
     register_dashboard(app, sys.modules[__name__])
+
+
+@app.before_request
+def ensure_cloud_worker():
+    if EKS_ENABLED:
+        cloud_worker.start()
+    if EKS_ENABLED and node_scaler:
+        node_scaler.start()
 
 
 @app.errorhandler(413)
@@ -166,9 +227,26 @@ def submit():
     body = request.get_json(silent=True)  # None instead of an exception if the body isn't JSON
     response, status, _ = tracked_submission(body or {})
     return jsonify(response), status
+
+
+@app.get("/submissions/<submission_id>")
+def submission_status(submission_id):
+    if len(submission_id) != 32 or any(ch not in "0123456789abcdef" for ch in submission_id):
+        return jsonify(error="Submission not found"), 404
+    row = cloud_store.get(submission_id)
+    if row is None:
+        return jsonify(error="Submission not found"), 404
+    if row["state"] in {"finished", "ambiguous"}:
+        return jsonify(submission_id=submission_id, state=row["state"],
+                       status_code=row["status_code"], response=row["response"]), 200
+    return jsonify(submission_id=submission_id, state=row["state"]), 202
  
  
 if __name__ == "__main__":
     if not SHARED_SECRET:
         raise SystemExit("SHARED_SECRET is not set. Copy .env.example to .env and fill it in.")
+    if EKS_ENABLED:
+        cloud_worker.start()
+    if node_scaler:
+        node_scaler.start()
     app.run(port=8000)

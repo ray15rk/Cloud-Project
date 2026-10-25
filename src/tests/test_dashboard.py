@@ -12,6 +12,7 @@ from src.watchdog.verifier import NonceStore
 @pytest.fixture
 def operator(monkeypatch, tmp_path):
     monkeypatch.setattr(gw, "SHARED_SECRET", b"dashboard-test-private-secret")
+    monkeypatch.setattr(gw, "EKS_ENABLED", False)
     monkeypatch.setattr(gw, "nonce_store", NonceStore())
     monkeypatch.setattr(gw, "resource_manager", ResourceManager())
     monkeypatch.setattr(gw, "activity_store", ActivityStore(tmp_path / "activity.sqlite3"))
@@ -63,6 +64,33 @@ def test_signed_submission_records_real_result_and_capacity_release(operator):
     assert calls["forwards"] == 1
     # A new store instance can read history; restarting the gateway does not erase it.
     assert ActivityStore(gw.activity_store.path).snapshot()["stats"]["total"] == 1
+    metrics = client.get("/api/metrics").json
+    assert metrics["locations"]["local"]["delivered"] == 1
+    assert metrics["locations"]["local"]["count"] == 1
+    assert metrics["locations"]["eks"]["count"] == 0
+
+
+def test_metrics_separate_locations_and_ignore_pending(tmp_path):
+    store = ActivityStore(tmp_path / "metrics.sqlite3")
+    now = 1_000_000.0
+    for number, (status, response) in enumerate([
+        (200, {"delivered": True, "execution_location": "local",
+               "timings_ms": {"verify_ms": 2, "dry_run_ms": 20, "forward_ms": 4}}),
+        (422, {"delivered": False, "stage": "dry_run", "execution_location": "eks",
+               "timings_ms": {"verify_ms": 4, "dry_run_ms": 40}}),
+        (503, {"delivered": False, "stage": "capacity"}),
+        (202, {"delivered": False, "stage": "queued", "execution_location": "eks"}),
+    ]):
+        store.record({"id": str(number), "name": "probe.py", "scenario": "test",
+                      "created_at": now - 10, "status_code": status,
+                      "duration_ms": 100, "response": response})
+    metrics = store.metrics(now=now)
+    assert metrics["locations"]["local"]["avg_dry_run_ms"] == 20
+    assert metrics["locations"]["eks"]["dry_run_failures"] == 1
+    assert metrics["capacity_rejected"] == 1
+    assert sum(bucket["count"] for bucket in metrics["throughput"]) == 3
+    assert metrics["submissions_per_second"] == 0.05
+    assert metrics["peak_per_second"] == 3
 
 
 def test_tamper_is_not_executed_and_has_timing(operator):
@@ -201,4 +229,4 @@ def test_health_checks_report_actual_dependencies(operator, monkeypatch):
     assert health["docker"]["status"] == "online"
     assert health["image"]["status"] == "ready"
     assert health["endpoint"]["status"] == "online"
-    assert health["eks"]["status"] == "not_connected"
+    assert health["eks"]["status"] == "disabled"

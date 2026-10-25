@@ -7,6 +7,8 @@ from src.watchdog.sign import sign_payload
 from src.watchdog.verifier import NonceStore
 from src.resource_manager.resource_manager import ResourceManager
 from src.gateway.activity import ActivityStore
+from src.gateway.cloud_submissions import CloudSubmissionStore
+from src.gateway.cloud_worker import CloudWorker
 
 SECRET = b"test-secret"
 
@@ -21,8 +23,10 @@ class FakeResponse:
 def client(monkeypatch, tmp_path):
     # Fresh secret and nonce store for every test, and record what the gateway does
     monkeypatch.setattr(gw, "SHARED_SECRET", SECRET)
+    monkeypatch.setattr(gw, "EKS_ENABLED", False)
     monkeypatch.setattr(gw, "nonce_store", NonceStore())
     monkeypatch.setattr(gw, "activity_store", ActivityStore(tmp_path / "activity.sqlite3"))
+    monkeypatch.setattr(gw, "cloud_store", CloudSubmissionStore(tmp_path / "cloud.sqlite3"))
 
     # Fresh resource manager with generous budget
     # Tests check HMAC/repay/forwarding logic instead of capacity behaviour, so that need enough room that admission always succeeds 
@@ -41,6 +45,10 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setattr(gw, "dry_run", fake_dry_run)
     monkeypatch.setattr(gw.requests, "post", fake_post)
     monkeypatch.setattr(gw, "notify_failure", lambda stage, reason, nonce: calls["notified"].append(stage))
+    worker = CloudWorker(gw.cloud_store, gw.activity_store, gw.configured_runner,
+                         gw.notify_failure, gw.ENDPOINT_URL)
+    monkeypatch.setattr(worker, "start", lambda: None)
+    monkeypatch.setattr(gw, "cloud_worker", worker)
     return gw.app.test_client(), calls
 
 
@@ -134,3 +142,64 @@ def test_capacity_exceeded_rejected(client, monkeypatch):
     assert resp.get_json()["stage"] == "capacity"
     assert calls["forwarded"] == [] # Never reach endpoint
     assert calls["notified"] == ["capacity"]
+
+
+def test_verified_overflow_uses_eks_and_forwards_only_after_success(client, monkeypatch):
+    c, calls = client
+    manager = ResourceManager(total_memory_mb=1)
+    monkeypatch.setattr(gw, "resource_manager", manager)
+    monkeypatch.setattr(gw, "EKS_ENABLED", True)
+    cloud_payloads = []
+
+    class FakeRunner:
+        def run(self, payload, submission_id):
+            cloud_payloads.append(payload)
+            return {"status": "OK", "job_name": "run-test"}
+
+    monkeypatch.setattr(gw, "configured_runner", lambda: FakeRunner())
+    gw.cloud_worker.runner_factory = gw.configured_runner
+    response = c.post("/submit", json=signed_body())
+    assert response.status_code == 202
+    assert response.get_json()["execution_location"] == "eks"
+    assert calls["forwarded"] == []
+    assert c.get(response.get_json()["status_url"]).status_code == 202
+    row = gw.cloud_store.claim("test-worker")
+    gw.cloud_worker._process(row, "test-worker")
+    result = c.get(response.get_json()["status_url"]).get_json()
+    assert result["status_code"] == 200
+    assert result["response"]["delivered"] is True
+    assert cloud_payloads == [b"print('hi')"]
+    assert calls["forwarded"] == [b"print('hi')"]
+    assert manager.snapshot()["committed_mb"] == 0
+
+
+def test_bad_signature_never_reaches_eks(client, monkeypatch):
+    c, calls = client
+    monkeypatch.setattr(gw, "resource_manager", ResourceManager(total_memory_mb=1))
+    monkeypatch.setattr(gw, "EKS_ENABLED", True)
+    monkeypatch.setattr(gw, "configured_runner", lambda: pytest.fail("EKS must not run"))
+    body = signed_body()
+    body["payload_b64"] = base64.b64encode(b"print('tampered')").decode()
+    assert c.post("/submit", json=body).status_code == 401
+    assert calls["forwarded"] == []
+
+
+def test_failed_eks_job_never_forwards(client, monkeypatch):
+    c, calls = client
+    monkeypatch.setattr(gw, "resource_manager", ResourceManager(total_memory_mb=1))
+    monkeypatch.setattr(gw, "EKS_ENABLED", True)
+
+    class FakeRunner:
+        def run(self, payload, submission_id):
+            return {"status": "oom_killed", "detail": "128Mi", "job_name": "run-failed"}
+
+    monkeypatch.setattr(gw, "configured_runner", lambda: FakeRunner())
+    gw.cloud_worker.runner_factory = gw.configured_runner
+    response = c.post("/submit", json=signed_body())
+    assert response.status_code == 202
+    assert response.get_json()["execution_location"] == "eks"
+    row = gw.cloud_store.claim("test-worker")
+    gw.cloud_worker._process(row, "test-worker")
+    result = c.get(response.get_json()["status_url"]).get_json()
+    assert result["status_code"] == 422
+    assert calls["forwarded"] == []

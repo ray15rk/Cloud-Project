@@ -70,7 +70,7 @@ function setView(view) {
   $("#sidebar").classList.remove("open");
   $("#menu-button").setAttribute("aria-expanded", "false");
   history.replaceState(null, "", `#${view}`);
-  if (view === "system") refreshHealth();
+  if (view === "system") { refreshHealth(); refreshMetrics(); }
   window.scrollTo({ top: 0, behavior: "auto" });
 }
 
@@ -126,6 +126,7 @@ function duration(milliseconds) {
 }
 
 function outcome(event) {
+  if (event.status_code === 202) return { label: "Running", style: "running" };
   if (event.response.delivered) return { label: "Delivered", style: "success" };
   if (event.status_code >= 500 && event.response.stage !== "capacity") return { label: "Failed", style: "error" };
   return { label: "Blocked", style: "failure" };
@@ -139,9 +140,9 @@ function renderTrace(attempts) {
   $("#trace-badge").className = `badge ${status.style}`;
   $("#trace-intro").textContent = `${last.name} · HTTP ${last.status_code}${attempts.length > 1 ? ` · ${attempts.length} attempts` : ""}`;
   const order = ["verify", "capacity", "dry_run", "forward"];
-  const failedIndex = response.delivered ? 4 : order.indexOf(response.stage);
+  const failedIndex = last.status_code === 202 ? -1 : response.delivered ? 4 : order.indexOf(response.stage);
   $$(".pipeline-stages li").forEach((item, index) => {
-    item.className = index < failedIndex ? "passed" : index === failedIndex ? "failed" : "skipped";
+    item.className = last.status_code === 202 ? (index === 0 ? "passed" : "") : index < failedIndex ? "passed" : index === failedIndex ? "failed" : "skipped";
     const timing = response.timings_ms?.[`${item.dataset.stage}_ms`];
     item.querySelector(".stage-time").textContent = timing !== undefined ? duration(timing) : index < failedIndex ? "Passed" : index === failedIndex ? "Stopped" : "Skipped";
   });
@@ -151,7 +152,23 @@ function renderTrace(attempts) {
     const output = result.endpoint_response?.stdout || result.reason || "Execution completed without output.";
     return `${label}\n${output}${attempt.journal_error ? `\n${attempt.journal_error}` : ""}`;
   }).join("\n\n");
-  $("#trace-footnote").textContent = `Completed in ${duration(attempts.reduce((sum, item) => sum + item.duration_ms, 0))} · Original payload ${response.delivered ? "delivered" : "not delivered on this attempt"}`;
+  $("#trace-footnote").textContent = last.status_code === 202 ? "Cloud execution is still running. Keep this page open for the final result." : `Completed in ${duration(attempts.reduce((sum, item) => sum + item.duration_ms, 0))} · Original payload ${response.delivered ? "delivered" : "not delivered on this attempt"}`;
+}
+
+async function awaitCloud(attempts) {
+  const deadline = Date.now() + 360000;
+  while (attempts.some((item) => item.status_code === 202) && Date.now() < deadline) {
+    renderTrace(attempts);
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    for (const item of attempts.filter((entry) => entry.status_code === 202)) {
+      const status = await api(item.response.status_url);
+      if (status.state === "finished" || status.state === "ambiguous") {
+        item.status_code = status.status_code;
+        item.response = status.response;
+      }
+    }
+  }
+  return attempts;
 }
 
 function setBusy(busy) {
@@ -180,10 +197,11 @@ async function runPipeline(capacity = false) {
     const data = await api(capacity ? "/api/capacity-test" : "/api/run", {
       method: "POST", body: JSON.stringify(capacity ? {} : { code, mode: state.mode, name: $("#filename").value || "untitled.py" })
     });
+    await awaitCloud(data.attempts);
     renderTrace(data.attempts);
     if (capacity) {
       const rejected = data.attempts.filter((item) => item.response.stage === "capacity").length;
-      toast(`Capacity test: ${data.submitted} submitted, ${rejected} rejected at local capacity.`);
+      toast(`Capacity test: ${data.submitted} submitted, ${rejected} rejected at capacity.`);
     } else toast(data.attempts.length > 1 ? "Replay test completed. Check both attempts below." : "Pipeline run completed. Results are ready.");
     if (data.attempts.some((entry) => entry.journal_error)) toast("Execution finished, but activity could not be saved. Check the gateway terminal.", true);
   } catch (error) {
@@ -278,6 +296,13 @@ async function refreshHealth(force = false) {
   $("#refresh-health .icon").classList.add("spinning");
   try {
     const services = await api(force ? "/api/health?refresh=1" : "/api/health");
+    const cloudCard = $(".cloud-card");
+    const cloudStatus = services.eks?.status || "unknown";
+    cloudCard.querySelector(".badge").textContent = cloudStatus.replaceAll("_", " ");
+    cloudCard.querySelector(".badge").className = `badge ${cloudStatus === "online" ? "success" : "amber"}`;
+    cloudCard.querySelector("p").textContent = cloudStatus === "online" ? "Cloud overflow is ready. Verified submissions use EKS when local sandbox slots are full." : cloudStatus === "disabled" ? "Cloud overflow is disabled in gateway configuration." : "Cloud overflow is currently unavailable. Check EKS credentials, context, and image settings.";
+    const scaler = services.node_scaler || { state: "disabled" };
+    cloudCard.querySelector(".cloud-note").textContent = cloudStatus === "online" ? `Overflow submissions receive HTTP 202. Operator-side node scaling: ${scaler.state}${scaler.desired ? ` (${scaler.desired} desired node${scaler.desired === 1 ? "" : "s"})` : ""}.` : "Submissions that cannot use local capacity are rejected with HTTP 503.";
     const labels = { gateway: ["API gateway", "Verification, routing & delivery"], docker: ["Docker engine", "Linux container runtime"], image: ["Sandbox image", services.image?.name || "Runtime image"], endpoint: ["Endpoint device", "Original payload execution"], central: ["Central server", "Failure notification inbox"], eks: ["AWS EKS", "Cloud overflow execution"] };
     $("#service-list").replaceChildren(...Object.entries(labels).map(([key, [name, description]]) => {
       const service = services[key] || { status: "unknown" };
@@ -289,6 +314,62 @@ async function refreshHealth(force = false) {
     }));
   } catch (error) { $("#service-list").textContent = error.message; }
   finally { $("#refresh-health .icon").classList.remove("spinning"); }
+}
+
+function metricRow(label, value, maximum, detail) {
+  const row = element("div", "metric-row");
+  const heading = element("div", "metric-row-heading");
+  heading.append(element("span", "", label), element("strong", "", detail));
+  const track = element("div", "metric-track");
+  const fill = element("div", "metric-fill");
+  fill.style.width = `${maximum ? Math.max(0, Math.min(100, value / maximum * 100)) : 0}%`;
+  track.append(fill);
+  row.append(heading, track);
+  return row;
+}
+
+async function refreshMetrics() {
+  try {
+    const data = await api("/api/metrics");
+    const buckets = data.throughput || [];
+    const maximum = Math.max(1, ...buckets.map((bucket) => bucket.count));
+    $("#throughput-chart").replaceChildren(...buckets.map((bucket) => {
+      const bar = element("div", "throughput-bar");
+      bar.style.height = `${Math.max(3, bucket.count / maximum * 100)}%`;
+      const second = new Date(bucket.start * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      bar.title = `${second}: ${bucket.count} submission${bucket.count === 1 ? "" : "s"}`;
+      bar.setAttribute("aria-label", bar.title);
+      return bar;
+    }));
+    $("#throughput-summary").textContent = `${data.submissions_per_second.toFixed(3)} submissions/s average · ${data.peak_per_second} peak in one second`;
+    const local = data.locations.local;
+    const eks = data.locations.eks;
+    const total = local.count + eks.count + data.capacity_rejected;
+    $("#capacity-chart").replaceChildren(
+      metricRow("Local", local.count, total, `${local.count} / ${data.local_slots} slots`),
+      metricRow("EKS", eks.count, total, `${eks.count} / ${data.cloud_limit} concurrent`),
+      metricRow("Rejected at capacity", data.capacity_rejected, total, `${data.capacity_rejected}`)
+    );
+    $("#capacity-caption").textContent = `${total} final submissions in the last hour; bars show the split, while slot labels show configured concurrency.`;
+    const stages = [["verify_ms", "Verification"], ["dry_run_ms", "Dry run"], ["forward_ms", "Forwarding"]];
+    const allLatencies = stages.flatMap(([key]) => [local[`avg_${key}`], eks[`avg_${key}`]]);
+    const maxLatency = Math.max(1, ...allLatencies);
+    $("#latency-chart").replaceChildren(...stages.flatMap(([key, name]) => [
+      metricRow(`Local ${name}`, local[`avg_${key}`], maxLatency, `${local[`avg_${key}`]} ms`),
+      metricRow(`EKS ${name}`, eks[`avg_${key}`], maxLatency, `${eks[`avg_${key}`]} ms`)
+    ]));
+    const maxFailures = Math.max(1, local.dry_run_failures, eks.dry_run_failures);
+    $("#failure-chart").replaceChildren(
+      metricRow("Local dry-run blocked", local.dry_run_failures, maxFailures, String(local.dry_run_failures)),
+      metricRow("EKS dry-run blocked", eks.dry_run_failures, maxFailures, String(eks.dry_run_failures))
+    );
+    $("#failure-summary").textContent = `Failure isolation: ${eks.dry_run_failures} EKS dry-run failures, ${local.dry_run_failures} local dry-run failures; ${local.delivered + eks.delivered} successful deliveries.`;
+  } catch (error) {
+    $("#throughput-chart").textContent = error.message;
+    $("#capacity-chart").textContent = "Metrics unavailable.";
+    $("#latency-chart").textContent = "Metrics unavailable.";
+    $("#failure-chart").textContent = "Metrics unavailable.";
+  }
 }
 
 function exportCsv() {
@@ -359,7 +440,7 @@ async function init() {
   } catch (error) { toast(error.message, true); }
   await refreshOverview(); refreshHealth();
   setInterval(() => { if (!document.hidden) refreshOverview(); }, 4000);
-  setInterval(() => { if (!document.hidden && document.body.dataset.view === "system") refreshHealth(); }, 15000);
+  setInterval(() => { if (!document.hidden && document.body.dataset.view === "system") { refreshHealth(); refreshMetrics(); } }, 15000);
 }
 
 init().catch((error) => toast(`Dashboard could not initialize: ${error.message}`, true));

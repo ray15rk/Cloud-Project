@@ -10,6 +10,15 @@ if not exist "%USERPROFILE%\.aws" mkdir "%USERPROFILE%\.aws"
 notepad "%USERPROFILE%\.aws\credentials"
 ```
 
+On macOS or Linux, create `~/.aws/credentials` with a local editor instead:
+
+```sh
+mkdir -p ~/.aws
+chmod 700 ~/.aws
+nano ~/.aws/credentials
+chmod 600 ~/.aws/credentials
+```
+
 Save the copied `[default]` block in that file. If the file already contains a
 `[default]` block, replace that block with the current lab values and preserve
 unrelated profiles. Keep credentials outside this repository. Refresh them from
@@ -32,7 +41,24 @@ If EKS is denied, check the lab Readme and ask your instructor for EKS access
 before provisioning. The proposal requires EKS; another service is not an
 equivalent implementation of that requirement.
 
-## 3. Remaining implementation order
+On macOS or Linux, run these equivalent read-only checks after setting the lab's
+region (replace `REGION` with the value in your lab instructions):
+
+```sh
+aws sts get-caller-identity --region REGION
+aws ecr describe-repositories --region REGION --max-items 1
+aws eks list-clusters --region REGION --max-items 1
+```
+
+Do not paste credential values into chat, terminal output, or this repository.
+
+## 3. Recreate the EKS deployment
+
+For exact commands to build/push the image, create a cluster and bounded node
+group in your own Learner Lab account, enable sandbox network isolation, run an
+overflow test, and clean up, follow the [macOS/Linux guide](eks-teammate-setup.md)
+or [Windows PowerShell guide](eks-teammate-setup-windows.md).
+The outline below explains the sequence those commands implement.
 
 1. Create an ECR repository and push `cloudproject-sandbox:dev`.
 2. Verify the lab's available IAM roles and EKS provisioning permissions. Set up
@@ -42,7 +68,7 @@ equivalent implementation of that requirement.
 4. Run the image as a disposable Kubernetes Job with resource limits, deadlines,
    a restrictive security context, no service-account token or Docker socket,
    isolated networking, disabled payload retries, and automatic cleanup.
-5. Implement EKS execution and bounded infrastructure retries in the gateway.
+5. Configure the existing gateway's EKS execution path and bounded retries.
 6. Demonstrate two concurrent local runs plus one cloud run, then capture failure,
    timing, overload, notification, and cleanup results for the project report.
 
