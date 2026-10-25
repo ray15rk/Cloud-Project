@@ -13,24 +13,31 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-def prepare_script_file(payload: bytes) -> Path:
+LANG_CONFIG = {
+    "python": {"ext": ".py", "cmd": ["python3"]},
+    "bash": {"ext": ".sh", "cmd": ["bash"]},
+    "powershell": {"ext": ".ps1", "cmd": ["pwsh", "-NoProfile", "-Command"]}
+}
+
+def prepare_script_file(payload: bytes, ext: str) -> Path:
     # Create a temporary file to hold the payload script
     # Docker run moiunts files and no in memory python bytes, so we need to write the payload to a temporary file first
     # Write to "/temp" to avoid permission issues
     # "delete = False" is used to keep the file around after closing it, so that Docker can access it
-    tmp = tempfile.NamedTemporaryFile(delete=False, mode='wb', suffix='.py')
+    tmp = tempfile.NamedTemporaryFile(delete=False, mode='wb', suffix=ext)
     tmp.write(payload)
     tmp.close()
     os.chmod(tmp.name, 0o644)  # Readable by the unprivileged sandbox user, writable only by owner
     return Path(tmp.name)
 
-def sandbox_execute(script_path: Path, cpu_limit: str = "0.5", memory_limit: str = "128m", timeout_seconds: int = 10) -> dict:
+def sandbox_execute(script_path: Path, lang_ext: str, lang_cmd: list, cpu_limit: str = "0.5", memory_limit: str = "128m", timeout_seconds: int = 10) -> dict:
     # Run script inside disposable docker container with resource limits and report what happened 
     # Docker's --cpus flag takes a plain number of cores, while Kubernetes uses a millicore format
     # Need to know the conversion so it is consistent for YAML files later
 
     # Unique name per run so we can find and kill this exact container if it times out
     container_name = f"sandbox-{uuid.uuid4().hex[:12]}"
+    mount_target = "/sandbox/script" + lang_ext
 
     docker_cmd = [
         "docker", 
@@ -50,14 +57,20 @@ def sandbox_execute(script_path: Path, cpu_limit: str = "0.5", memory_limit: str
         "--security-opt", "no-new-privileges",     # Block regaining privileges via setuid tricks
         "--pids-limit", "64",                      # Cap process count, stops fork bombs
 
+        "--tmpfs", "/nonexistent",
+        "--tmpfs", "/tmp",
         # Mount script into the container with read only
         # Sandbox can process read but never modify it to prevent script tempering mid run
-        "-v", f"{script_path}:/sandbox/script.py:ro", 
+        "-v", f"{script_path}:{mount_target}:ro", 
 
         # The same runtime image can be tagged for ECR and used by EKS Jobs.
         # Its entrypoint runs the per-request script mounted above.
         os.environ.get("SANDBOX_IMAGE", "cloudproject-sandbox:dev"),
+        
         ]
+
+    docker_cmd.extend(lang_cmd)
+    docker_cmd.append(mount_target)
 
     try:
         # Timeout used to terminate a CPU throttled intinite loop script, otherwise it will run forever and never return
@@ -93,11 +106,17 @@ def sandbox_execute(script_path: Path, cpu_limit: str = "0.5", memory_limit: str
         "stdout": result.stdout
     }
 
-def dry_run(payload: bytes, cpu_limit: str = "0.5", memory_limit: str = "128m", timeout_seconds: int = 10) -> dict:
+def dry_run(payload: bytes, memory_limit: str = "128m", cpu_limit: str = "0.5", timeout_seconds: int = 10, language: str = "python") -> dict:
     # Write payload to temp file, run it in sandbox, then clean up temp file regardless of result
-    script_path = prepare_script_file(payload)
+    lang_key = language.lower()
+    if lang_key not in LANG_CONFIG:
+        return {"status": "error", "detail": f"Unsupported language: {language}"}
+
+    config = LANG_CONFIG[lang_key]
+    script_path = prepare_script_file(payload, config["ext"])
+
     try:
-        return sandbox_execute(script_path, cpu_limit, memory_limit, timeout_seconds)
+        return sandbox_execute(script_path, config["ext"], config["cmd"], cpu_limit, memory_limit, timeout_seconds)
     finally:
         # Clean up the temporary script file after execution to avoid leaving behind unnecessary files
         script_path.unlink()

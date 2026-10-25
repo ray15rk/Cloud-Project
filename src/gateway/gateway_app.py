@@ -60,6 +60,7 @@ def process_submission(body: dict) -> tuple[dict, int]:
             "nonce": body["nonce"],
             "timestamp": int(body["timestamp"]),
             "tag": body["tag"],
+            "language": body.get("language", "python")
         }
         if (not isinstance(message["nonce"], str) or not 1 <= len(message["nonce"]) <= 128
                 or not isinstance(message["tag"], str) or len(message["tag"]) != 64
@@ -74,7 +75,9 @@ def process_submission(body: dict) -> tuple[dict, int]:
     if not SHARED_SECRET:
         notify_failure("verify", "gateway secret is not configured", nonce)
         return {"delivered": False, "stage": "verify", "reason": "gateway secret is not configured"}, 503
+    
     t = time.perf_counter()
+    
     try:
         payload = verify_payload(message, SHARED_SECRET, nonce_store)
         
@@ -82,6 +85,9 @@ def process_submission(body: dict) -> tuple[dict, int]:
         timings["verify_ms"] = round((time.perf_counter() - t) * 1000, 2)
         notify_failure("verify", str(e), nonce)
         return {"delivered": False, "stage": "verify", "reason": str(e), "timings_ms": timings}, 401
+
+    #payload = message["payload"]
+    
     timings["verify_ms"] = round((time.perf_counter() - t) * 1000, 2)
 
     # Stage 2a: capacity check that gates the dry run specifically, not the whole request
@@ -94,7 +100,7 @@ def process_submission(body: dict) -> tuple[dict, int]:
     # Stage 2b: resource-bounded dry run. Since this is expensive, it only runs for legit payloads.
     t = time.perf_counter()
     try:
-        result = dry_run(payload, memory_limit=DRY_RUN_MEMORY_LIMIT)
+        result = dry_run(payload, memory_limit=DRY_RUN_MEMORY_LIMIT, language=message["language"])
 
     except Exception as e:
         # Fail closed: if the sandbox itself is broken (e.g. Docker not running), the payload is dropped, never forwarded untested
