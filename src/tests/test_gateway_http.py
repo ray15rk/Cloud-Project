@@ -12,7 +12,6 @@ load_dotenv()
 SHARED_SECRET = os.environ.get("SHARED_SECRET", "").encode("utf-8")
 
 def send_to_gateway(language: str, script_content: str, test_name: str = None):
-
     if test_name:
         print(f"\n--- Testing {language.upper()} via HTTP ({test_name}) ---")
     else:
@@ -24,9 +23,8 @@ def send_to_gateway(language: str, script_content: str, test_name: str = None):
     nonce = uuid.uuid4().hex
     timestamp = int(time.time())
     
-    # MATCH sign.py EXACTLY: payload_bytes + "|" + nonce + "|" + timestamp
+    # MATCH sign.py: payload_bytes + "|" + nonce + "|" + timestamp
     message_to_sign = payload_bytes + b"|" + nonce.encode("utf-8") + b"|" + str(timestamp).encode("utf-8")
-    
     tag = hmac.new(SHARED_SECRET, message_to_sign, hashlib.sha256).hexdigest()
     
     payload = {
@@ -47,36 +45,46 @@ def send_to_gateway(language: str, script_content: str, test_name: str = None):
     time.sleep(1)
 
 if __name__ == "__main__":
+    print("==================================================")
+    print("--- 1. Standard Valid Executions (Python, Bash, PowerShell) ---")
+    print("==================================================")
+    send_to_gateway("python", 'print("Python execution successful!")', "Standard Python")
+    send_to_gateway("bash", '#!/bin/bash\necho "Bash execution successful!"', "Standard Bash")
+    send_to_gateway("powershell", 'Write-Output "PowerShell execution successful!"', "Standard PowerShell")
 
-    print("--- Running Standard Valid Tests ---")
-    send_to_gateway("bash", '#!/bin/bash\necho "Bash successful!"')
-    send_to_gateway("powershell", 'Write-Output "PowerShell successful!"')
-    send_to_gateway("lua", 'print("Lua successful!")')
-    send_to_gateway("js", 'console.log("Node.js successful!");')
-    send_to_gateway("perl", 'print "Perl successful!\\n";')
-    send_to_gateway("ruby", 'puts "Ruby successful!"')
+    print("\n==================================================")
+    print("--- 2. Adversarial Security Boundary Tests ---")
+    print("==================================================")
 
+    # 1. Memory Hog - Python (Should return oom_killed at 128 MB)
+    malicious_python_oom = "x = []\nwhile True:\n    x.append(' ' * 10**6)"
+    send_to_gateway("python", malicious_python_oom, "Python Memory Hog")
 
+    # 2. Memory Hog - Bash (Exponential doubling triggering 128 MB cgroup kill)
+    malicious_bash_oom = 'data="x"\nwhile true; do\n    data="$data$data"\ndone'
+    send_to_gateway("bash", malicious_bash_oom, "Bash Memory Hog")
 
-    print("\n--- Running Adversarial Security Tests ---")
+    # 3. CPU Infinite Loop - Python (Should return timeout after 10s)
+    malicious_python_loop = "while True:\n    pass"
+    send_to_gateway("python", malicious_python_loop, "Python Infinite Loop")
 
-    malicious_python = "x = []\nwhile True:\n    x.append(' ' * 10**6)"   # 1. The Memory Hog (Should return oom_killed)
-    send_to_gateway("python", malicious_python, "Memory Hog")
+    # 4. CPU Infinite Loop - Bash (Should return timeout after 10s)
+    malicious_bash_loop = "while true; do\n    :\ndone"
+    send_to_gateway("bash", malicious_bash_loop, "Bash Infinite Loop")
 
-    malicious_js = "while(true) {}"   # 2. The CPU Infinite Loop (Should return timeout after 10s)
-    send_to_gateway("js", malicious_js, "Infinite Loop")
+    # 5. Outbound Network Breach - Bash (Should fail under --network none)
+    malicious_bash_net = "curl -m 3 -I https://google.com"
+    send_to_gateway("bash", malicious_bash_net, "Bash Network Breach")
 
-    malicious_bash = "curl -m 3 -I https://google.com"   # 3. The Network Breach (Should return an execution error or empty result)
-    send_to_gateway("bash", malicious_bash, "Network Breach")
+    # 6. Filesystem Breakout - Bash (Should fail under --read-only rootfs)
+    malicious_bash_fs = "echo 'tampered' > /sandbox/hacked.txt"
+    send_to_gateway("bash", malicious_bash_fs, "Bash Filesystem Breakout")
 
-    malicious_ruby = "File.write('/sandbox/hacked.txt', 'hacked')"   # 4. The Filesystem Breakout (Should return a Read-Only error)
-    send_to_gateway("ruby", malicious_ruby, "Filesystem Breakout")
+    print("\n==================================================")
+    print("--- 3. Advanced Boundary & Ephemeral State Tests ---")
+    print("==================================================")
 
-
-
-    print("\n--- Running Advanced Boundary Tests ---")
-
-    # 5. Process Exhaustion (Should return an execution error about resource limits)
+    # 7. Process Exhaustion / Fork Bomb (Cap at --pids-limit 64)
     pid_exhaustion = """import multiprocessing, time   
 def worker():
     time.sleep(5)
@@ -89,8 +97,8 @@ for i in range(100):
 """
     send_to_gateway("python", pid_exhaustion, "Process Exhaustion")
 
-    # 6. State Contamination (Write Phase)
+    # 8. State Contamination (Write Phase)
     send_to_gateway("bash", "echo 'ghost data' > /tmp/ghost.txt && echo 'Wrote to /tmp'", "State Contamination - Write")
     
-    # 7. State Contamination (Read Phase - Should fail to find the file)
+    # 9. State Contamination (Read Phase - Should fail to find the file due to --rm + tmpfs)
     send_to_gateway("bash", "cat /tmp/ghost.txt || echo 'File not found'", "State Contamination - Read")

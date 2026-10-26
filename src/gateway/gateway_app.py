@@ -160,7 +160,7 @@ def process_submission(body: dict, submission_id=None, name="CLI submission.py",
     try:
         resp = requests.post(
             ENDPOINT_URL, data=payload,
-            headers={"Content-Type": "application/octet-stream"}, timeout=ENDPOINT_TIMEOUT,
+            headers={"Content-Type": "application/octet-stream", "X-Payload-Language": message.get("language", "python")}, timeout=ENDPOINT_TIMEOUT,
         )
         resp.raise_for_status()
         endpoint_response = resp.json()

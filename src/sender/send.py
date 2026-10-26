@@ -29,7 +29,15 @@ def response_body(response):
                 "request_id": response.headers.get("X-Request-ID")}
  
  
-def build_request(payload: bytes) -> dict:
+def infer_language(filename: str, explicit: str | None = None) -> str:
+    if explicit:
+        return explicit.lower()
+    ext = os.path.splitext(filename)[1].lower()
+    mapping = {".sh": "bash", ".bash": "bash", ".py": "python", ".ps1": "powershell"}
+    return mapping.get(ext, "python")
+
+
+def build_request(payload: bytes, language: str = "python") -> dict:
     # Sign the payload, then base64 encode it so it can travel inside JSON
     message = sign_payload(payload, SHARED_SECRET)
     return {
@@ -37,18 +45,21 @@ def build_request(payload: bytes) -> dict:
         "nonce": message["nonce"],
         "timestamp": message["timestamp"],
         "tag": message["tag"],
+        "language": language,
     }
  
  
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("script", help="Path to the script to push")
+    parser.add_argument("--language", default=None, help="Payload language runtime (e.g. bash, python, powershell)")
     parser.add_argument("--tamper", action="store_true", help="Corrupt the payload after signing")
     parser.add_argument("--replay", action="store_true", help="Send the same signed message twice")
     args = parser.parse_args()
  
+    lang = infer_language(args.script, args.language)
     with open(args.script, "rb") as f:
-        body = build_request(f.read())
+        body = build_request(f.read(), language=lang)
  
     if args.tamper:
         # Simulate in-transit corruption: change the payload but keep the original tag
