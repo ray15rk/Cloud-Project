@@ -18,7 +18,7 @@ def operator(monkeypatch, tmp_path):
     monkeypatch.setattr(gw, "activity_store", ActivityStore(tmp_path / "activity.sqlite3"))
     monkeypatch.setattr(gw, "notify_failure", lambda *args: None)
     calls = {"dry_runs": 0, "forwards": 0, "status": "OK"}
-    def dry_run(payload, memory_limit=None):
+    def dry_run(payload, memory_limit=None, **kwargs):
         calls["dry_runs"] += 1
         return {"status": calls["status"], "detail": "controlled test result"}
     def post(*args, **kwargs):
@@ -168,7 +168,7 @@ def test_examples_are_fixed_project_files(operator):
     client, _, _ = operator
     response = client.get("/api/examples")
     assert response.status_code == 200
-    assert {entry["id"] for entry in response.json["examples"]} == {"good", "infinite_loop", "memory_hog"}
+    assert {entry["id"] for entry in response.json["examples"]} == {"good", "infinite_loop", "memory_hog", "good_sh", "infinite_loop_sh", "memory_hog_sh", "network_breach_sh", "filesystem_breakout_sh", "good_ps"}
 
 
 def test_invalid_unicode_credentials_are_rejected_without_a_server_error(operator):

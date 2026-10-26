@@ -90,6 +90,13 @@ function updateEditor() {
   $("#line-numbers").textContent = Array.from({ length: lines }, (_, i) => i + 1).join("\n");
   $("#code-size").textContent = `${lines} ${lines === 1 ? "line" : "lines"} · ${(bytes / 1024).toFixed(1)} KB · UTF-8`;
   $("#run-button").disabled = state.busy || !code.trim();
+  const fn = ($("#filename").value || "").toLowerCase();
+  const langText = $("#language-text");
+  if (langText) {
+    if (fn.endsWith(".sh")) langText.textContent = "Bash";
+    else if (fn.endsWith(".ps1")) langText.textContent = "PowerShell";
+    else langText.textContent = "Python 3.11";
+  }
   try { localStorage.setItem("relay-draft", JSON.stringify({ code, name: $("#filename").value })); } catch (_) { /* Draft persistence is optional. */ }
 }
 
@@ -107,7 +114,11 @@ async function upload(file) {
   $("#file-input").value = "";
   if (!file) return;
   if (state.busy) return toast("Wait for the current run to finish.", true);
-  if (!file.name.toLowerCase().endsWith(".py")) return toast("Choose a Python (.py) file.", true);
+  const lower = file.name.toLowerCase();
+  const validExts = [".py", ".sh", ".ps1"];
+  if (!validExts.some((ext) => lower.endsWith(ext))) {
+    return toast("Choose a Python (.py), Bash (.sh), or PowerShell (.ps1) script.", true);
+  }
   if (file.size > 65536) return toast("Scripts must be 64 KB or smaller.", true);
   try {
     const content = await file.arrayBuffer();
@@ -195,7 +206,10 @@ async function runPipeline(capacity = false) {
   $("#trace-footnote").textContent = "The request is in progress. Final stage results will appear when it finishes.";
   try {
     const data = await api(capacity ? "/api/capacity-test" : "/api/run", {
-      method: "POST", body: JSON.stringify(capacity ? {} : { code, mode: state.mode, name: $("#filename").value || "untitled.py" })
+      method: "POST", body: JSON.stringify(capacity ? {} : {
+        code, mode: state.mode, name: $("#filename").value || "untitled.py",
+        language: ($("#filename").value || "").toLowerCase().endsWith(".sh") ? "bash" : ($("#filename").value || "").toLowerCase().endsWith(".ps1") ? "powershell" : "python"
+      })
     });
     await awaitCloud(data.attempts);
     renderTrace(data.attempts);

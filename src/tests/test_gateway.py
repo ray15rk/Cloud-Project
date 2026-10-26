@@ -34,7 +34,7 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setattr(gw, "resource_manager", ResourceManager(total_memory_mb=10_000)) 
     calls = {"forwarded": [], "notified": [], "dry_run": "OK"}
 
-    def fake_dry_run(payload, memory_limit=None):
+    def fake_dry_run(payload, memory_limit=None, **kwargs):
         status = calls["dry_run"]
         return {"status": status, "stdout": "ok"} if status == "OK" else {"status": status, "detail": "fake"}
 
