@@ -7,12 +7,12 @@ def main():
     print("--- Starting Pipeline ---")
     
     # Define the exact paths based on your folder structure
-    mock_endpoint_path = os.path.join("src", "tests", "test_mock_endpoint.py")
+    # mock_endpoint_path = os.path.join("src", "tests", "test_mock_endpoint.py")
     test_script_path = os.path.join("src", "tests", "test_gateway_http.py")
     
     # 1. Start the mock endpoint in the background
-    print(f"Booting Mock Endpoint ({mock_endpoint_path})...")
-    endpoint_process = subprocess.Popen([sys.executable, mock_endpoint_path])
+    # print(f"Booting Mock Endpoint ({mock_endpoint_path})...")
+    # endpoint_process = subprocess.Popen([sys.executable, mock_endpoint_path])
     
     # 2. Start the gateway in the background
     print("Booting API Gateway (Port 8000)...")
@@ -30,7 +30,7 @@ def main():
         
     # 4. Clean up background servers
     print("\n--- Shutting Down ---")
-    endpoint_process.terminate()
+    # endpoint_process.terminate()
     gateway_process.terminate()
     print("Pipeline closed safely.")
 
