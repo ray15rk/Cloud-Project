@@ -11,7 +11,13 @@ from dotenv import load_dotenv
 load_dotenv()
 SHARED_SECRET = os.environ.get("SHARED_SECRET", "").encode("utf-8")
 
-def send_to_gateway(language: str, script_content: str):
+def send_to_gateway(language: str, script_content: str, test_name: str = None):
+
+    if test_name:
+        print(f"\n--- Testing {language.upper()} via HTTP ({test_name}) ---")
+    else:
+        print(f"\n--- Testing {language.upper()} via HTTP ---")
+
     payload_bytes = script_content.encode("utf-8")
     payload_b64 = base64.b64encode(payload_bytes).decode("utf-8")
     
@@ -31,7 +37,6 @@ def send_to_gateway(language: str, script_content: str):
         "language": language
     }
     
-    print(f"--- Testing {language.upper()} via HTTP ---")
     try:
         response = requests.post("http://127.0.0.1:8000/submit", json=payload)
         print(f"Status Code: {response.status_code}")
@@ -42,9 +47,27 @@ def send_to_gateway(language: str, script_content: str):
     time.sleep(1)
 
 if __name__ == "__main__":
+
+    print("--- Running Standard Valid Tests ---")
     send_to_gateway("bash", '#!/bin/bash\necho "Bash successful!"')
     send_to_gateway("powershell", 'Write-Output "PowerShell successful!"')
     send_to_gateway("lua", 'print("Lua successful!")')
     send_to_gateway("js", 'console.log("Node.js successful!");')
     send_to_gateway("perl", 'print "Perl successful!\\n";')
     send_to_gateway("ruby", 'puts "Ruby successful!"')
+
+
+
+    print("\n--- Running Adversarial Security Tests ---")
+
+    malicious_python = "x = []\nwhile True:\n    x.append(' ' * 10**6)"   # 1. The Memory Hog (Should return oom_killed)
+    send_to_gateway("python", malicious_python, "Memory Hog")
+
+    malicious_js = "while(true) {}"   # 2. The CPU Infinite Loop (Should return timeout after 10s)
+    send_to_gateway("js", malicious_js, "Infinite Loop")
+
+    malicious_bash = "curl -m 3 -I https://google.com"   # 3. The Network Breach (Should return an execution error or empty result)
+    send_to_gateway("bash", malicious_bash, "Network Breach")
+
+    malicious_ruby = "File.write('/sandbox/hacked.txt', 'hacked')"   # 4. The Filesystem Breakout (Should return a Read-Only error)
+    send_to_gateway("ruby", malicious_ruby, "Filesystem Breakout")
