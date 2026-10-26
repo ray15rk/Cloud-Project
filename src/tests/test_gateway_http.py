@@ -71,3 +71,26 @@ if __name__ == "__main__":
 
     malicious_ruby = "File.write('/sandbox/hacked.txt', 'hacked')"   # 4. The Filesystem Breakout (Should return a Read-Only error)
     send_to_gateway("ruby", malicious_ruby, "Filesystem Breakout")
+
+
+
+    print("\n--- Running Advanced Boundary Tests ---")
+
+    # 5. Process Exhaustion (Should return an execution error about resource limits)
+    pid_exhaustion = """import multiprocessing, time   
+def worker():
+    time.sleep(5)
+for i in range(100):
+    try:
+        multiprocessing.Process(target=worker).start()
+    except Exception as e:
+        print(f"Blocked at process {i}: {e}")
+        break
+"""
+    send_to_gateway("python", pid_exhaustion, "Process Exhaustion")
+
+    # 6. State Contamination (Write Phase)
+    send_to_gateway("bash", "echo 'ghost data' > /tmp/ghost.txt && echo 'Wrote to /tmp'", "State Contamination - Write")
+    
+    # 7. State Contamination (Read Phase - Should fail to find the file)
+    send_to_gateway("bash", "cat /tmp/ghost.txt || echo 'File not found'", "State Contamination - Read")
