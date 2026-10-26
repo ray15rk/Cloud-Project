@@ -39,6 +39,12 @@ def send_to_gateway(language: str, script_content: str):
     except requests.exceptions.ConnectionError:
         print("Error: Could not connect to gateway.\n")
 
+    time.sleep(1)
+
 if __name__ == "__main__":
     send_to_gateway("bash", '#!/bin/bash\necho "Bash successful!"')
     send_to_gateway("powershell", 'Write-Output "PowerShell successful!"')
+    send_to_gateway("lua", 'print("Lua successful!")')
+    send_to_gateway("js", 'console.log("Node.js successful!");')
+    send_to_gateway("perl", 'print "Perl successful!\\n";')
+    send_to_gateway("ruby", 'puts "Ruby successful!"')

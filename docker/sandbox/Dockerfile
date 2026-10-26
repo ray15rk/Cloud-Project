@@ -8,7 +8,12 @@ RUN apt-get update && \
     wget -q "https://packages.microsoft.com/config/debian/12/packages-microsoft-prod.deb" && \
     dpkg -i packages-microsoft-prod.deb && \
     apt-get update && \
-    apt-get install -y powershell && \
+    apt-get install -y \
+        powershell \ 
+        lua5.4 \
+        nodejs \
+        perl \
+        ruby && \
     rm packages-microsoft-prod.deb && \
     rm -rf /var/lib/apt/lists/*
 
@@ -18,7 +23,8 @@ USER 65534:65534
 
 # Payloads are mounted separately for each run, never baked into the image.
 # Isolated mode ignores user Python configuration; -B avoids bytecode writes.
-
+# ENTRYPOINT ["python", "-I", "-B", "-u"]
+# CMD ["/sandbox/script.py"]
 
 # ENTRYPOINT and CMD are intentionally removed as sandbox.py now dynamicall appends the correct binary
 # ENTRYPOINT ["python", "-I", "-B", "-u"]

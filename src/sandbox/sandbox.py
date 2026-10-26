@@ -16,7 +16,11 @@ load_dotenv()
 LANG_CONFIG = {
     "python": {"ext": ".py", "cmd": ["python3"]},
     "bash": {"ext": ".sh", "cmd": ["bash"]},
-    "powershell": {"ext": ".ps1", "cmd": ["pwsh", "-NoProfile", "-Command"]}
+    "powershell": {"ext": ".ps1", "cmd": ["pwsh", "-NoProfile", "-Command"]},
+    "lua": {"ext": ".lua", "cmd": ["lua5.4"]},
+    "js": {"ext": ".js", "cmd": ["node", "--no-deprecation"]},
+    "perl": {"ext": ".pl", "cmd": ["perl", "-T"]}, 
+    "ruby": {"ext": ".rb", "cmd": ["ruby", "--disable-gems"]}
 }
 
 def prepare_script_file(payload: bytes, ext: str) -> Path:
