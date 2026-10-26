@@ -39,7 +39,7 @@ def infer_language(filename: str, explicit: str | None = None) -> str:
 
 def build_request(payload: bytes, language: str = "python") -> dict:
     # Sign the payload, then base64 encode it so it can travel inside JSON
-    message = sign_payload(payload, SHARED_SECRET)
+    message = sign_payload(payload, SHARED_SECRET, language=language)
     return {
         "payload_b64": base64.b64encode(message["payload"]).decode("ascii"),
         "nonce": message["nonce"],
