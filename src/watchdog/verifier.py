@@ -52,10 +52,11 @@ def verify_payload(message: dict, secret: bytes, nonce_store: NonceStore) -> byt
     nonce = message["nonce"]
     timestamp = message["timestamp"]
     tag = message["tag"]
+    language = message.get("language", "python")
 
     # 1. Authenticity first: recompute the tag over payload + nonce + timestamp
     # Nothing touches the nonce store until we know the message came from someone holding the key
-    expected_tag = hmac.new(secret, build_mac_input(payload, nonce, timestamp), hashlib.sha256).hexdigest()
+    expected_tag = hmac.new(secret, build_mac_input(payload, nonce, timestamp, language), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expected_tag, tag):
         raise VerificationError("HMAC Verification Failed")
 

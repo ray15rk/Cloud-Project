@@ -91,3 +91,18 @@ def test_concurrent_replay():
         results = list(pool.map(lambda _: store.check_and_record(nonce), range(20)))
 
     assert results.count(True) == 1
+
+def test_changing_language_breaks_the_tag():
+    message = sign_payload(b"echo hi", SECRET_KEY, language="bash")
+    message["language"] = "powershell"
+    with pytest.raises(VerificationError, match="HMAC Verification Failed"):
+        verify_payload(message, SECRET_KEY, NonceStore())
+
+def test_signed_language_verifies():
+    message = sign_payload(b"echo hi", SECRET_KEY, language="bash")
+    assert verify_payload(message, SECRET_KEY, NonceStore()) == b"echo hi"
+
+def test_missing_language_is_treated_as_python():
+    message = sign_payload(b"print(1)", SECRET_KEY)
+    del message["language"]
+    assert verify_payload(message, SECRET_KEY, NonceStore()) == b"print(1)"

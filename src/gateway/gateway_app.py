@@ -18,6 +18,7 @@ from flask import Flask, jsonify, request
 from src.sandbox.sandbox import dry_run
 from src.sandbox.eks_runner import configured_runner
 from src.watchdog.verifier import NonceStore, VerificationError, verify_payload
+from src.watchdog.sign import SUPPORTED_LANGUAGES
 from src.resource_manager.resource_manager import resource_manager
 from src.gateway.activity import ActivityStore
 from src.gateway.cloud_submissions import CloudCapacityError, CloudSubmissionStore
@@ -74,7 +75,8 @@ def process_submission(body: dict, submission_id=None, name="CLI submission.py",
         if (not isinstance(message["nonce"], str) or not 1 <= len(message["nonce"]) <= 128
                 or not isinstance(message["tag"], str) or len(message["tag"]) != 64
                 or any(character not in "0123456789abcdefABCDEF" for character in message["tag"])
-                or len(message["payload"]) > 65536):
+                or len(message["payload"]) > 65536
+                or message["language"] not in SUPPORTED_LANGUAGES):
             raise ValueError("invalid message fields")
     except (KeyError, TypeError, ValueError, OverflowError, binascii.Error) as e:
         notify_failure("parse", f"malformed message: {e}", nonce)
