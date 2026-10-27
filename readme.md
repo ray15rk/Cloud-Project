@@ -114,10 +114,9 @@ environment, then use .\.venv\Scripts\python.exe for subsequent Python commands.
 The EKS image has been published to ECR, and the gateway can run overflow dry
 runs as hardened Kubernetes Jobs. See [EKS team handoff](docs/eks-team-handoff.md)
 for the architecture and options for teammates, and
-[deployment notes](infra/eks/README.md) for this Learner Lab environment.
-Teammates with separate accounts can follow the
-[macOS/Linux EKS setup](docs/eks-teammate-setup.md) or
-[Windows PowerShell EKS setup](docs/eks-teammate-setup-windows.md).
+[deployment notes](infra/eks/README.md) for the Sydney cluster.
+Teammates can follow the [macOS/Linux access guide](docs/eks-teammate-setup.md)
+or [Windows PowerShell access guide](docs/eks-teammate-setup-windows.md).
 
 ## Nginx
 
@@ -243,7 +242,8 @@ seconds. This leaves processing margin without a client timing out before the
 proxy's configured read timeout. These are layered inactivity limits, not a hard
 end-to-end cancellation guarantee: slow trickles and work already dispatched may
 outlive a disconnected client. Do not automatically retry a script whose outcome
-is unknown. Review the Learner Lab budget before running EKS workloads.
+is unknown. Check the personal AWS account's credits and current charges before
+running EKS workloads.
 
 JSON access logs include request ID, status, upstream timings and rejection
 source; bodies and query strings are excluded. Nginx returns JSON for its own
@@ -316,35 +316,17 @@ Each send.py call prints the HTTP status and the gateway's JSON response - check
 the status code AND the "stage"/"reason" fields match what's expected above, not just
 that it didn't crash.
 
-## EKS overflow on macOS
+## EKS cloud bursting
 
-See [the live EKS deployment guide](infra/eks/README.md) for the cluster and
-image identifiers. In your gitignored `.env`, set `LOCAL_MEMORY_BUDGET_MB=256`,
-`EKS_ENABLED=true`, `EKS_CONTEXT=cloudproject-sandbox-lab`, and `EKS_IMAGE` to
-the immutable ECR image URI shown there. Run the dashboard with
-`.venv/bin/python -m src.dashboard`. The AWS CLI credentials in
-`~/.aws/credentials` must still be valid, and the cluster API allowlist must
-include your current public IP.
+The deployed cluster is `cloudproject-sandbox-sydney` in `ap-southeast-2`.
+When local dry-run capacity is full, the gateway queues a verified submission
+as an EKS Job and returns HTTP 202. The sender polls until the Job finishes and
+the successful payload reaches the local endpoint. Kubernetes Cluster Autoscaler
+separately adds a worker node when a Pod cannot fit on the current node; the
+gateway no longer changes node-group capacity.
 
-Local submissions finish synchronously. Verified overflow submissions return
-HTTP 202 with a `submission_id` and `status_url`. The sender CLI and dashboard
-poll the status URL until the EKS dry run and endpoint delivery finish. The
-gateway keeps at most three outstanding cloud submissions by default; set
-`EKS_MAX_INFLIGHT` to change that bound. Pending payloads are stored temporarily
-in a gitignored SQLite file with owner-only permissions and removed at terminal
-status. A failed or uncertain endpoint forwarding attempt is never retried
-automatically.
-
-The endpoint executes the forwarded script directly on its host. Only the
-dry run is isolated in EKS. In the Learner Lab, an optional gateway-side node
-scaler watches sandbox Pods for resource scheduling shortages and adjusts the
-managed node group between one and two nodes. It requires the local gateway
-and current AWS lab credentials to keep running; it is not Kubernetes Cluster
-Autoscaler. See [EKS deployment](infra/eks/README.md).
-
-This is a hybrid local/cloud demonstration. The gateway, dashboard, central
-server, and final endpoint run on the Mac at `127.0.0.1`; they are not hosted
-in EKS. Teammates can run the local-only mode from a clone. Using this EKS
-cluster from another machine requires separate AWS/Kubernetes authorization
-and network access; a teammate with a different Learner Lab account needs
-their own cluster and ECR image.
+For the image digest, `.env` values, smoke test, and shutdown guidance, see
+[Sydney deployment notes](infra/eks/README.md). The
+[team handoff](docs/eks-team-handoff.md) explains the local/cloud boundary and
+access requirements for teammates. Only the EKS dry run is isolated; the final
+endpoint still runs the accepted script on the local host.
