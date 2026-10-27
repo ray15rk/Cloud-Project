@@ -23,8 +23,8 @@ def send_to_gateway(language: str, script_content: str, test_name: str = None):
     nonce = uuid.uuid4().hex
     timestamp = int(time.time())
     
-    # MATCH sign.py: payload_bytes + "|" + nonce + "|" + timestamp
-    message_to_sign = payload_bytes + b"|" + nonce.encode("utf-8") + b"|" + str(timestamp).encode("utf-8")
+    # MATCH sign.py: payload_bytes + "|" + nonce + "|" + timestamp + "|" + language
+    message_to_sign = (payload_bytes + b"|" + nonce.encode("utf-8") + b"|" + str(timestamp).encode("utf-8") + b"|" + language.encode("utf-8"))
     tag = hmac.new(SHARED_SECRET, message_to_sign, hashlib.sha256).hexdigest()
     
     payload = {

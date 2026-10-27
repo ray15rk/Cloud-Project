@@ -52,10 +52,25 @@ def client(monkeypatch, tmp_path):
     return gw.app.test_client(), calls
 
 
-def signed_body(payload=b"print('hi')"):
-    m = sign_payload(payload, SECRET)
+def signed_body(payload=b"print('hi')", language="python"):
+    m = sign_payload(payload, SECRET, language=language)
     return {"payload_b64": base64.b64encode(m["payload"]).decode(), "nonce": m["nonce"],
-            "timestamp": m["timestamp"], "tag": m["tag"]}
+            "timestamp": m["timestamp"], "tag": m["tag"], "language": language}
+
+def test_language_changed_in_transit_is_dropped(client):
+    c, calls = client
+    body = signed_body(b"echo hi", language="bash")
+    body["language"] = "powershell" # attacker swaps interpreter, keeps old tag
+    resp = c.post("/submit", json=body)
+    assert resp.status_code == 401
+    assert resp.get_json()["stage"] == "verify"
+    assert calls["forwarded"] == []
+
+def test_unsupported_language_is_rejected_before_verification(client):
+    c, calls = client
+    resp = c.post("/submit", json=signed_body(b"puts 1", language="ruby"))
+    assert resp.status_code == 400
+    assert resp.get_json()["stage"] == "parse"
 
 
 def test_valid_payload_is_delivered(client):
