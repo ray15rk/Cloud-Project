@@ -301,8 +301,7 @@ async function refreshHealth(force = false) {
     cloudCard.querySelector(".badge").textContent = cloudStatus.replaceAll("_", " ");
     cloudCard.querySelector(".badge").className = `badge ${cloudStatus === "online" ? "success" : "amber"}`;
     cloudCard.querySelector("p").textContent = cloudStatus === "online" ? "Cloud overflow is ready. Verified submissions use EKS when local sandbox slots are full." : cloudStatus === "disabled" ? "Cloud overflow is disabled in gateway configuration." : "Cloud overflow is currently unavailable. Check EKS credentials, context, and image settings.";
-    const scaler = services.node_scaler || { state: "disabled" };
-    cloudCard.querySelector(".cloud-note").textContent = cloudStatus === "online" ? `Overflow submissions receive HTTP 202. Operator-side node scaling: ${scaler.state}${scaler.desired ? ` (${scaler.desired} desired node${scaler.desired === 1 ? "" : "s"})` : ""}.` : "Submissions that cannot use local capacity are rejected with HTTP 503.";
+    cloudCard.querySelector(".cloud-note").textContent = cloudStatus === "online" ? "Overflow submissions receive HTTP 202 and run as EKS Jobs." : "Submissions that cannot use local capacity are rejected with HTTP 503.";
     const labels = { gateway: ["API gateway", "Verification, routing & delivery"], docker: ["Docker engine", "Linux container runtime"], image: ["Sandbox image", services.image?.name || "Runtime image"], endpoint: ["Endpoint device", "Original payload execution"], central: ["Central server", "Failure notification inbox"], eks: ["AWS EKS", "Cloud overflow execution"] };
     $("#service-list").replaceChildren(...Object.entries(labels).map(([key, [name, description]]) => {
       const service = services[key] || { status: "unknown" };
