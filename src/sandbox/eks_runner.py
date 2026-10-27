@@ -19,7 +19,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 class EKSRunner:
-    def __init__(self, image: str, context: str = "cloudproject-sandbox-lab"):
+    def __init__(self, image: str, context: str = "cloudproject-sandbox-sydney"):
         if "@sha256:" not in image:
             raise ValueError("EKS_IMAGE must use an immutable image digest")
         self.image = image
@@ -178,4 +178,4 @@ class EKSRunner:
 
 def configured_runner():
     image = os.environ.get("EKS_IMAGE", "")
-    return EKSRunner(image, os.environ.get("EKS_CONTEXT", "cloudproject-sandbox-lab"))
+    return EKSRunner(image, os.environ.get("EKS_CONTEXT", "cloudproject-sandbox-sydney"))

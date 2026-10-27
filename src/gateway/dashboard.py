@@ -361,9 +361,6 @@ def register_dashboard(app, gateway):
                 except Exception:
 
                     services["eks"] = {"status": "unavailable"}
-
-            services["node_scaler"] = gateway.node_scaler.status() if gateway.node_scaler else {"state": "disabled", "desired": None}
-
             health_cache.update(checked=time.monotonic(), value=services)
 
             return jsonify(services)

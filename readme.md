@@ -317,7 +317,7 @@ When local memory capacity (default: 2 slots / 256 MB) is exceeded, the gateway 
    * Synchronous local requests finish immediately.
    * Overflowed requests return **`HTTP 202 Accepted`** with a `status_url`.
    * Clients poll `/submissions/<id>` until the EKS Job completes and the verified payload is forwarded to the local endpoint.
-   * A gateway `NodeScaler` monitors resource-pending Pods and dynamically adjusts the EKS managed node group between 1 and 2 nodes.
+   * Worker node capacity is managed dynamically in-cluster via **Kubernetes Cluster Autoscaler**.
 
 For cloud setup details, see:
 * [EKS Team Handoff & Architecture](docs/eks-team-handoff.md)

@@ -1,102 +1,131 @@
-# Learner Lab EKS deployment
+# EKS deployment
 
-Region: `us-east-1`. Cluster: `cloudproject-sandbox-lab`. The cluster uses
-Kubernetes 1.34, the lab's pre-created EKS cluster and node roles, and two
-default-VPC subnets. Its public API endpoint is limited to the operator's current
-public IP `/32`; private endpoint access is also enabled. Do not commit the
-operator's current IP or AWS credentials.
+Region: `ap-southeast-2`. Cluster: `cloudproject-sandbox-sydney`.
+The cluster runs Kubernetes 1.36 in Rance's personal AWS account. Its public
+API endpoint is limited to the operator's current public IP; private endpoint
+access is also enabled. Do not commit AWS credentials, secrets, or the current
+public IP.
 
-The sandbox image is in the private `cloudproject-sandbox` ECR repository at tag
-`20261024-runner1`. Resolve its digest before creating Jobs:
+## Deployed resources
+
+- Managed node group: `cloudproject-sandbox-nodes`
+- Worker instance type: `t3.small`, On-Demand
+- Node group size: minimum 1, desired 1, maximum 2
+- Node label: `workload=cloudproject-sandbox`
+- Sandbox namespace: `cloudproject-sandbox`
+- Private ECR repository: `cloudproject-sandbox`
+- Kubernetes Cluster Autoscaler: installed in `kube-system` using EKS Pod Identity
+
+The autoscaler was installed with Helm chart `9.59.0` and a Kubernetes 1.36
+autoscaler image. Its service account is `kube-system/cluster-autoscaler`,
+associated with the dedicated IAM role
+`cloudproject-eks-cluster-autoscaler-sydney`. The ASG has the discovery tags
+`k8s.io/cluster-autoscaler/enabled=true` and
+`k8s.io/cluster-autoscaler/cloudproject-sandbox-sydney=owned`. The policy in
+`autoscaler-node-policy.json` limits scaling actions to ASGs with those tags;
+it belongs on the autoscaler role, not the worker node role.
+
+The node launch template requires IMDSv2 and sets its metadata response hop
+limit to one. The node group spans three Sydney subnets. Kubernetes Cluster
+Autoscaler watches for Pods that cannot be scheduled, increases the managed node
+group's desired size when needed, and removes an unneeded extra node later.
+The local gateway does not scale nodes.
+
+The sandbox namespace has a resource quota, restricted Pod Security settings,
+and a network policy. VPC CNI network policy enforcement is set to strict.
+CoreDNS has a separate policy so DNS continues to work.
+
+## Check the cluster
+
+Use the AWS CLI profile created for this account:
 
 ```sh
-aws ecr describe-images --region us-east-1 \
-  --repository-name cloudproject-sandbox \
-  --image-ids imageTag=20261024-runner1 \
-  --query 'imageDetails[0].imageDigest' --output text
+aws eks describe-cluster --profile cloudproject-sydney \
+  --region ap-southeast-2 --name cloudproject-sandbox-sydney \
+  --query 'cluster.{status:status,version:version}'
+
+aws eks list-nodegroups --profile cloudproject-sydney \
+  --region ap-southeast-2 --cluster-name cloudproject-sandbox-sydney
+
+KUBECONFIG=/Users/rance/.kube/config-cloudproject-sydney \
+  kubectl --context cloudproject-sandbox-sydney get nodes -L workload
+helm list -n kube-system
 ```
 
-## Check the live cluster
+Set `KUBECONFIG=/Users/rance/.kube/config-cloudproject-sydney` in the local
+environment or `.env` before using the Sydney Kubernetes context.
 
-```sh
-aws eks describe-cluster --region us-east-1 \
-  --name cloudproject-sandbox-lab \
-  --query 'cluster.{status:status,version:version,endpoint:resourcesVpcConfig}'
-aws eks list-nodegroups --region us-east-1 \
-  --cluster-name cloudproject-sandbox-lab
+## Sandbox image
+
+The sandbox image is stored in the Sydney ECR repository. Use the image's
+immutable digest rather than a mutable tag:
+
+```text
+562358727339.dkr.ecr.ap-southeast-2.amazonaws.com/cloudproject-sandbox@sha256:ea1f0713883b312c27f9465700f049e469d4627ac96304a4cb7fd4f9e711cf01
 ```
 
-The node launch template is `cloudproject-eks-nodes`. It requires IMDSv2 and
-sets the metadata response hop limit to one. The active managed node group uses
-one `t3.medium` node initially and a maximum of two. The node group limit alone
-does not provide demand-driven scaling. The Learner Lab prevents creating the
-IAM role needed for Kubernetes Cluster Autoscaler, so the local gateway can run
-an operator-side scaler instead. It watches sandbox Pods for resource-related
-Unschedulable conditions, requests a second node, and returns to one after five
-idle minutes. It runs only while the dashboard/gateway and AWS credentials are
-active. `autoscaler-node-policy.json` remains a proposal and has **not** been
-attached to the shared node role.
-
-The Learner Lab identity cannot create a dedicated gateway IAM role. Its
-cluster-creator identity is being used for initial setup and smoke tests. Do not
-claim namespace-scoped gateway authorization until a separate role and EKS access
-entry are available. The RBAC manifest in `infra/k8s/gateway-rbac.yaml` is
-prepared but cannot enforce a limit on that cluster-admin identity.
-
-For an explanation of which components run locally, what AWS hosts, and how
-teammates can use this code, see [the team handoff](../../docs/eks-team-handoff.md).
-For a complete setup in a separate Learner Lab account, follow the
-[macOS/Linux guide](../../docs/eks-teammate-setup.md) or
-[Windows PowerShell guide](../../docs/eks-teammate-setup-windows.md). The commands below
-describe the existing deployment in Rance's account.
+This is the digest used for the initial successful smoke test. Update
+`EKS_IMAGE` when a new image is built and pushed.
 
 ## Run the gateway on this Mac
 
-Keep current Learner Lab AWS credentials in `~/.aws/credentials`, outside the
-repository. Set these values in the gitignored `.env`:
+Keep AWS credentials outside the repository. Set these values in the gitignored
+`.env`, alongside the generated `SHARED_SECRET` and existing local service URLs:
 
 ```dotenv
 LOCAL_MEMORY_BUDGET_MB=256
 EKS_ENABLED=true
-EKS_CONTEXT=cloudproject-sandbox-lab
-EKS_IMAGE=257465915306.dkr.ecr.us-east-1.amazonaws.com/cloudproject-sandbox@sha256:b83af745ca35080f205abcb1fe2a898973ec1d02817bc08e75733cbfda856230
+EKS_CONTEXT=cloudproject-sandbox-sydney
+EKS_IMAGE=562358727339.dkr.ecr.ap-southeast-2.amazonaws.com/cloudproject-sandbox@sha256:ea1f0713883b312c27f9465700f049e469d4627ac96304a4cb7fd4f9e711cf01
 EKS_MAX_INFLIGHT=3
-EKS_NODE_SCALING_ENABLED=true
-EKS_CLUSTER=cloudproject-sandbox-lab
-EKS_NODEGROUP=sandbox-workers
-AWS_REGION=us-east-1
-GATEWAY_URL=http://127.0.0.1:8000/submit
+AWS_REGION=ap-southeast-2
+AWS_PROFILE=cloudproject-sydney
+KUBECONFIG=/Users/rance/.kube/config-cloudproject-sydney
+GATEWAY_URL=http://127.0.0.1:8080/submit
 ```
 
-Start Docker Desktop, then run `.venv/bin/python -m src.dashboard` from the
-project directory and open `http://127.0.0.1:8000`. Submit with
-`.venv/bin/python -m src.sender.send src/examples/good.py`. Cloud work returns
-HTTP 202 first; the CLI polls for the final status. To reliably demonstrate
-overflow, temporarily start the dashboard with
-`LOCAL_MEMORY_BUDGET_MB=1 .venv/bin/python -m src.dashboard`, then restore
-the ordinary 256 MB budget on the next start.
+From the project directory, start the dashboard:
 
-Set `GATEWAY_URL` to port 8000 when using the dashboard directly as above.
-Use port 8080 when Nginx is running and you want to submit through it.
+```sh
+.venv/bin/python -m src.dashboard
+```
 
-The cluster API allowlist contains the operator's public IP at creation time.
-If the Mac's public IP changes, update EKS public access CIDRs before running
-the gateway. The `voclabs` credentials expire and must be refreshed from the
-Learner Lab when authentication fails.
+Open `http://127.0.0.1:8000`. With the project's Nginx proxy running on port
+8080, submit an example from another terminal:
 
-Ordinary short scripts may finish before a Pod waits long enough to need a new
-node. To observe scaling, submit a bounded workload whose combined CPU requests
-exceed the first node's allocatable CPU and check the dashboard's System status
-or `aws eks describe-nodegroup`. The scaler leaves the managed node group's
-min/max at 1/2 and changes desired size only. If the gateway stops while two
-nodes are desired, restart it for automatic scale-down or manually set desired
-size to one after checking no sandbox workload is active.
+```sh
+.venv/bin/python -m src.sender.send src/examples/good.py
+```
 
-## Cleanup
+To demonstrate cloud bursting, restart the dashboard with a temporary low local
+memory budget:
 
-The EKS control plane incurs hourly charges while it exists, even when the
-node group is empty. After preserving test evidence, delete the managed node
-group, wait for deletion, then delete the cluster. The default VPC and its
-subnets predate this project and must remain. Remove the project launch template
-and ECR repository only when the project no longer needs them. Verify each
-resource's absence with the corresponding AWS `describe` or `list` command.
+```sh
+LOCAL_MEMORY_BUDGET_MB=1 .venv/bin/python -m src.dashboard
+```
+
+The submission should first return HTTP 202 while the EKS Job is queued, then
+return a completed result with `execution_location: eks`. Restart the dashboard
+normally afterward to restore the configured local memory budget.
+
+The gateway's cloud path and Cluster Autoscaler's node scaling are separate:
+the gateway chooses EKS when local capacity is insufficient; Cluster Autoscaler
+adds a worker node only when Kubernetes cannot schedule a Pod on existing nodes.
+
+## Verified behavior
+
+- A sandbox Job completed and printed `RUNTIME_OK`.
+- The sandbox Job's attempted outbound network connection was blocked.
+- A pending workload caused Cluster Autoscaler to add a second worker node.
+- After the workload was deleted, Cluster Autoscaler removed the extra node.
+- A gateway submission completed successfully through EKS and returned
+  `execution_location: eks`.
+
+## Costs and shutdown
+
+The EKS control plane, worker nodes, storage, and other used AWS resources can
+incur charges while they exist. Scaling back to one node does not stop all
+charges. When the environment is no longer needed, delete the node group and
+then the EKS cluster after preserving any required evidence. Delete the project
+launch template and ECR repository only when they are no longer needed. Leave
+the account's default VPC and subnets in place.
