@@ -1,0 +1,43 @@
+# Namespace for Falco plus the network policy it needs under strict VPC CNI mode.
+# Apply BEFORE installing the chart:  kubectl apply -f infra/falco/falco-namespace.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: falco
+  labels:
+    # Falco's eBPF probe needs privileged access to the node. The sandbox namespace stays "restricted".
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
+---
+# Strict VPC CNI mode blocks traffic for pods no policy selects (see infra/k8s/coredns-networkpolicy.yaml).
+# Falco only needs the network at pod start: its init container downloads the container plugin
+# from ghcr.io. Nothing here lets a sandbox reach Falco, and Falco's alerts never leave the node:
+# the gateway reads them through the Kubernetes API.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: falco-egress
+  namespace: falco
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: falco
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - ports:
+        - protocol: TCP
+          port: 443

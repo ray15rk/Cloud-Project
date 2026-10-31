@@ -12,6 +12,8 @@ import yaml
 from kubernetes import client, config
 from kubernetes.client.exceptions import ApiException
 
+from src.sandbox.falco_monitor import FalcoMonitor, MonitorError, monitoring_enabled, settings_from_env
+
 
 NAMESPACE = "cloudproject-sandbox"
 TEMPLATE = Path(__file__).resolve().parents[2] / "infra" / "k8s" / "sandbox-job.yaml.template"
@@ -19,11 +21,12 @@ LOGGER = logging.getLogger(__name__)
 
 
 class EKSRunner:
-    def __init__(self, image: str, context: str = "cloudproject-sandbox-sydney"):
+    def __init__(self, image: str, context: str = "cloudproject-sandbox-sydney", monitor: FalcoMonitor | None = None):
         if "@sha256:" not in image:
             raise ValueError("EKS_IMAGE must use an immutable image digest")
         self.image = image
         self.context = context
+        self.monitor = monitor   # None = outcome-only checks (no behavioural detection)
 
     def _clients(self):
         configuration = client.Configuration()
@@ -129,7 +132,30 @@ class EKSRunner:
             result.update(status="OK")
         else:
             result.update(status="error", detail=output[-16000:] or terminated.reason or "script failed")
+        if self.monitor is not None:
+            self._apply_behaviour(core, pod, terminated, result)
         return result
+
+    def _apply_behaviour(self, core, pod, terminated, result):
+        """Fold Falco's verdict into the result. A threat overrides any outcome, because it explains
+        the run better than an exit code does; an unobserved or unreadable run is never called clean."""
+        started = time.monotonic()
+        try:
+            behaviour = self.monitor.collect(core, pod, terminated, call=self._call)
+        except MonitorError as exc:
+            LOGGER.warning("Falco could not vet %s: %s", pod.metadata.name, exc)
+            result["behaviour"] = {"engine": "falco", "verdict": "unknown", "error": str(exc)}
+            if result["status"] == "OK":
+                result.update(status="infrastructure_error", detail=f"behaviour monitor unavailable: {exc}")
+            return
+        finally:
+            result["monitor_ms"] = round((time.monotonic() - started) * 1000, 2)
+        result["behaviour"] = behaviour.as_dict()
+        if behaviour.threat:
+            result.update(status="threat_detected", detail=behaviour.summary())
+        elif not behaviour.observed and result["status"] == "OK":
+            result.update(status="infrastructure_error",
+                          detail="Falco did not report the sandbox starting, so the run cannot be called clean")
 
     def run(self, payload: bytes, submission_id: str) -> dict:
         if len(payload) > 65536:
@@ -175,7 +201,18 @@ class EKSRunner:
         except Exception:
             return False
 
+    def monitor_healthy(self) -> bool | None:
+        """None when behaviour monitoring is off, else whether a Falco pod is running."""
+        if self.monitor is None:
+            return None
+        try:
+            core, _ = self._clients()
+            return self.monitor.healthy(core, self._call)
+        except Exception:
+            return False
+
 
 def configured_runner():
     image = os.environ.get("EKS_IMAGE", "")
-    return EKSRunner(image, os.environ.get("EKS_CONTEXT", "cloudproject-sandbox-sydney"))
+    monitor = FalcoMonitor(settings_from_env()) if monitoring_enabled() else None
+    return EKSRunner(image, os.environ.get("EKS_CONTEXT", "cloudproject-sandbox-sydney"), monitor)

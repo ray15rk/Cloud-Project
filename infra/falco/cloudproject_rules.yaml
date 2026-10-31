@@ -1,0 +1,165 @@
+# Falco rules for the Relay sandbox (Falco 0.45.x with the `container` plugin loaded).
+#
+# What these rules do
+#   Every dry run is an EKS Job in the `cloudproject-sandbox` namespace. Falco watches the
+#   kernel's syscalls for those containers from OUTSIDE the sandbox and reports behaviour:
+#   opening network sockets, writing files, starting other programs, reading credentials,
+#   and calling privileged syscalls. The gateway (src/sandbox/falco_monitor.py) reads these
+#   alerts and refuses to forward any payload whose dry run showed such behaviour, even when
+#   the script itself exited 0 (for example because it caught the error from a blocked call).
+#
+# Contract with the gateway. Keep it intact when editing; src/tests/test_falco_rules.py enforces it.
+#   * Every rule has the tag  cloudproject_sandbox.
+#   * Exactly one rule has the tag  observed. It proves Falco was watching this container.
+#     If the gateway never sees it, the run is NOT treated as clean (fail closed).
+#   * Rules with the tag  threat  block delivery. Each also has a  behaviour_<class>  tag.
+#   * Every output contains %container.id and %k8s.pod.name so an alert can be matched to
+#     exactly one Job's Pod.
+#
+# Policy lives in the lists below. To change what counts as unexpected, edit a list, not a rule.
+# CPU/memory abuse is NOT detected here: the Job's resource limits and the 10-second
+# deadline in docker/sandbox/runner.py already handle it.
+
+# ---------------------------------------------------------------- policy (edit these)
+
+# Namespaces whose containers are treated as sandboxes.
+- list: cp_sandbox_namespaces
+  items: [cloudproject-sandbox]
+
+# Programs a payload is allowed to start. These are the interpreters the sandbox runs
+# (see LANG_CONFIG in src/sandbox/sandbox.py). Anything else a script executes is reported.
+- list: cp_allowed_programs
+  items: [python, python3, python3.11, bash, pwsh]
+
+# Files a payload may open for writing. The root filesystem is read-only, so this is nearly empty.
+- list: cp_allowed_write_paths
+  items: [/dev/null, /dev/tty]
+
+# Locations a dry run has no reason to read. The service-account token is not mounted,
+# so a read here is reconnaissance.
+- list: cp_sensitive_paths
+  items: [/var/run/secrets, /run/secrets, /etc/shadow, /etc/kubernetes, /root/.aws, /root/.kube, /proc/1/environ]
+
+# Syscalls with no legitimate use in a dry run.
+- list: cp_privileged_syscalls
+  items: [ptrace, setns, unshare, bpf, init_module, finit_module]
+
+# ---------------------------------------------------------------- building blocks
+
+- macro: cp_sandbox
+  condition: (container.id != host and k8s.ns.name in (cp_sandbox_namespaces))
+
+# The container runtime (runc) performs its own setup syscalls inside the new container before
+# it starts the entrypoint (writing oom_score_adj, joining namespaces, and so on). Those are
+# not the payload, so every threat rule excludes them.
+- macro: cp_sandbox_workload
+  condition: (cp_sandbox and not proc.name startswith runc)
+
+- macro: cp_spawned_process
+  condition: (evt.type in (execve, execveat))
+
+# Matches blocked attempts too: with a read-only root filesystem a write fails with EROFS,
+# and a hidden failure is still behaviour worth reporting.
+- macro: cp_open_for_write
+  condition: (evt.type in (open, openat, openat2) and (evt.is_open_write=true or evt.res=EROFS))
+
+- macro: cp_open_any
+  condition: (evt.type in (open, openat, openat2))
+
+# ---------------------------------------------------------------- proof of observation
+
+# The container's init process (PID 1) is docker/sandbox/runner.py. Seeing it start proves
+# Falco was attached to this container from the beginning. A script cannot fake this: only
+# the container's own PID 1 matches.
+- rule: CP Sandbox Observed
+  desc: >
+    The sandbox runner started as PID 1 of a sandbox container. Used by the gateway as proof
+    that Falco was watching this run. Not a threat.
+  condition: >
+    cp_sandbox and cp_spawned_process and proc.vpid=1
+    and proc.cmdline contains "/sandbox/runner.py"
+  output: >
+    Sandbox runner started | container_id=%container.id pod=%k8s.pod.name ns=%k8s.ns.name
+    cmd=%proc.cmdline
+  priority: NOTICE
+  tags: [cloudproject_sandbox, observed]
+
+# ---------------------------------------------------------------- behaviour (each blocks delivery)
+
+# Socket creation returns immediately, so this catches network attempts even when the later
+# connect() would hang until the runner kills the script at its deadline.
+- rule: CP Sandbox Network Socket
+  desc: >
+    A sandboxed payload created an IP or raw packet socket. Dry runs have no network by design,
+    so any attempt shows what the payload would do on a real device.
+  condition: >
+    cp_sandbox_workload and evt.type=socket
+    and (evt.arg.domain contains AF_INET or evt.arg.domain contains AF_PACKET)
+  output: >
+    Network socket opened | container_id=%container.id pod=%k8s.pod.name ns=%k8s.ns.name
+    proc=%proc.name cmd=%proc.cmdline evt=%evt.type domain=%evt.arg.domain
+  priority: WARNING
+  tags: [cloudproject_sandbox, threat, behaviour_network]
+
+- rule: CP Sandbox Network Connect
+  desc: >
+    A sandboxed payload tried to connect to an IP address. Adds the destination to the finding.
+  condition: >
+    cp_sandbox_workload and evt.type=connect
+    and (fd.typechar=4 or fd.typechar=6)
+  output: >
+    Outbound connection attempted | container_id=%container.id pod=%k8s.pod.name
+    ns=%k8s.ns.name proc=%proc.name cmd=%proc.cmdline evt=%evt.type fd=%fd.name
+  priority: WARNING
+  tags: [cloudproject_sandbox, threat, behaviour_network]
+
+- rule: CP Sandbox File Write Attempt
+  desc: >
+    A sandboxed payload tried to open a file for writing. The root filesystem is read-only,
+    so the attempt fails, but the payload would write on a real device.
+  condition: >
+    cp_sandbox_workload and cp_open_for_write
+    and not fd.name in (cp_allowed_write_paths)
+  output: >
+    File write attempted | container_id=%container.id pod=%k8s.pod.name ns=%k8s.ns.name
+    proc=%proc.name cmd=%proc.cmdline evt=%evt.type fd=%fd.name
+  priority: WARNING
+  tags: [cloudproject_sandbox, threat, behaviour_filesystem]
+
+- rule: CP Sandbox Sensitive Path Access
+  desc: >
+    A sandboxed payload tried to open a credential or secret location.
+  condition: >
+    cp_sandbox_workload and cp_open_any
+    and fd.name pmatch (cp_sensitive_paths)
+  output: >
+    Sensitive path accessed | container_id=%container.id pod=%k8s.pod.name ns=%k8s.ns.name
+    proc=%proc.name cmd=%proc.cmdline evt=%evt.type fd=%fd.name
+  priority: WARNING
+  tags: [cloudproject_sandbox, threat, behaviour_credentials]
+
+- rule: CP Sandbox Unexpected Program
+  desc: >
+    A sandboxed payload started a program other than its interpreter. The container's own PID 1
+    is excluded; it is the runner and is covered by the observation rule.
+  condition: >
+    cp_sandbox_workload and cp_spawned_process
+    and not proc.vpid=1
+    and not proc.name in (cp_allowed_programs)
+  output: >
+    Unexpected program started | container_id=%container.id pod=%k8s.pod.name
+    ns=%k8s.ns.name proc=%proc.name cmd=%proc.cmdline parent=%proc.pname
+  priority: WARNING
+  tags: [cloudproject_sandbox, threat, behaviour_process]
+
+- rule: CP Sandbox Privileged Syscall
+  desc: >
+    A sandboxed payload called a syscall used for debugging other processes, changing
+    namespaces, loading kernel code or running eBPF. A dry run never needs these.
+  condition: >
+    cp_sandbox_workload and evt.type in (cp_privileged_syscalls)
+  output: >
+    Privileged syscall called | container_id=%container.id pod=%k8s.pod.name
+    ns=%k8s.ns.name proc=%proc.name cmd=%proc.cmdline evt=%evt.type
+  priority: CRITICAL
+  tags: [cloudproject_sandbox, threat, behaviour_privilege]

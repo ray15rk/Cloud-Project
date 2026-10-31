@@ -1,0 +1,53 @@
+# Helm values for the falcosecurity/falco chart (keys checked against chart 9.2.x, Falco 0.45.x).
+#
+# The rules are NOT inlined here. docs/falco-setup.md loads infra/falco/cloudproject_rules.yaml with
+# --set-file, so there is one source of truth for the rules.
+
+driver:
+  kind: modern_ebpf          # CO-RE eBPF: no kernel module or headers. Needs kernel >= 5.8 with BTF.
+  modernEbpf:
+    dropFailedExit: false    # MUST stay false. Blocked syscalls fail, and a failed attempt is exactly
+                             # the behaviour we want to see (a script that swallows the error).
+
+collectors:
+  containerEngine:
+    enabled: true            # container plugin: provides container.id and k8s.pod.name / k8s.ns.name
+  kubernetes:
+    enabled: false           # the k8s metacollector is not needed; alerts are matched by container id and pod name
+
+tty: true                    # flush alerts to the log immediately (the gateway reads this log)
+
+falcoctl:
+  artifact:
+    follow:
+      enabled: false         # no runtime rule updates: the rules are pinned in the ConfigMap
+  config:
+    artifact:
+      install:
+        refs: []             # do not download the stock ruleset. The chart still adds the container plugin.
+
+falco:
+  rules_files:
+    - /etc/falco/rules.d     # ONLY our rules; stock rules would add unrelated noise to the log we read
+  rule_matching: all         # one event may trigger more than one of our rules
+  json_output: true
+  json_include_output_property: true
+  json_include_tags_property: true
+  json_include_output_fields_property: true
+  priority: notice           # the "observed" rule is NOTICE; nothing lower is needed
+  buffered_outputs: false
+  log_level: info
+  stdout_output:
+    enabled: true
+  syslog_output:
+    enabled: false
+
+# Sized for the 1-2 node t3.small (2 GiB) group. The chart defaults (512Mi / 1Gi) are too heavy there.
+# If the Falco pod is OOMKilled, raise the memory limit before anything else.
+resources:
+  requests:
+    cpu: 50m
+    memory: 200Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi

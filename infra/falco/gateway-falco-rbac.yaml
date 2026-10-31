@@ -1,0 +1,32 @@
+# Lets the gateway identity read Falco's alert log. Same Group as infra/k8s/gateway-rbac.yaml.
+# Apply after installing Falco:  kubectl apply -f infra/falco/gateway-falco-rbac.yaml
+#
+# Read-only and namespace-scoped: the gateway can list Falco pods and read their logs, nothing else.
+# The log contains alert metadata (rule names, command lines) for sandbox containers only,
+# because infra/falco/cloudproject_rules.yaml is the only ruleset loaded.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cloudproject-gateway-falco
+  namespace: falco
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cloudproject-gateway-falco
+  namespace: falco
+subjects:
+  - kind: Group
+    name: cloudproject-gateway
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: cloudproject-gateway-falco
+  apiGroup: rbac.authorization.k8s.io
