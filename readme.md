@@ -318,9 +318,37 @@ When local memory capacity (default: 2 slots / 256 MB) is exceeded, the gateway 
    * Overflowed requests return **`HTTP 202 Accepted`** with a `status_url`.
    * Clients poll `/submissions/<id>` until the EKS Job completes and the verified payload is forwarded to the local endpoint.
    * Worker node capacity is managed dynamically in-cluster via **Kubernetes Cluster Autoscaler**.
+4. **Cloud-first mode (optional):** set `EXECUTION_MODE=cloud` to send *every* dry run to EKS, so the
+   gateway host runs no untrusted code. The default `hybrid` keeps local Docker as the fast path.
+   `EKS_WORKERS` sets how many Jobs run at once.
 
 For cloud setup details, see:
 * [EKS Team Handoff & Architecture](docs/eks-team-handoff.md)
 * [AWS EKS Deployment Notes](infra/eks/README.md)
 * [Windows EKS Setup Guide](docs/eks-teammate-setup-windows.md)
 * [macOS / Linux EKS Setup Guide](docs/eks-teammate-setup.md)
+
+---
+
+## 7. Behavioural Threat Detection (Falco)
+
+The sandbox's own checks only see the **outcome** of a dry run (timeout, OOM, exit code). A script that tries
+the network, catches the error and exits 0 looks harmless. [Falco](https://falco.org) runs on the EKS nodes,
+outside the sandbox, and reports what a script actually *attempted* at the syscall level: network sockets,
+file writes, other programs, credential paths, privileged syscalls. The gateway rejects the payload
+(`HTTP 422`, `threat_detected`) before it is forwarded, and fails closed (`HTTP 503`) if Falco did not
+observe the run.
+
+```dotenv
+EKS_ENABLED=true
+FALCO_ENABLED=true
+EXECUTION_MODE=cloud     # monitor every dry run; hybrid mode only monitors EKS overflow
+```
+
+```bash
+python -m scripts.check_falco                          # live canary test against your cluster
+python -m src.sender.send src/examples/network_swallowed.py   # exits 0 itself, still rejected (422)
+```
+
+Install steps, the rule table, tuning, troubleshooting and limits: [Falco setup guide](docs/falco-setup.md).
+Rules and policy lists: [`infra/falco/cloudproject_rules.yaml`](infra/falco/cloudproject_rules.yaml).

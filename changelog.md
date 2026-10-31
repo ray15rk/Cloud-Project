@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-10-31
+- Added behavioural threat detection with Falco (`docs/falco-setup.md`). The EKS dry run was judged only by
+  outcome (timeout, OOM kill, exit code), so a script that attempted something forbidden, swallowed the
+  error and exited 0 passed and was forwarded. Falco now watches the sandbox from the node, outside the
+  container, and `src/sandbox/falco_monitor.py` turns its alerts into a verdict per Pod. New status
+  `threat_detected` (HTTP 422); findings are returned under `behaviour` in the API response.
+- Fails closed: a run is only clean if Falco reported the sandbox runner starting (`CP Sandbox Observed`) and
+  no threat alert. Unreachable or silent Falco gives `infrastructure_error` (HTTP 503), never a pass.
+- Rules (`infra/falco/cloudproject_rules.yaml`) are default-deny policy lists, not per-attack checks:
+  sockets, file writes, unexpected programs, credential paths, privileged syscalls. CPU/memory stay with
+  the Job limits and the runner deadline.
+- Added `EXECUTION_MODE=cloud` (every dry run is an EKS Job; default `hybrid` unchanged) and `EKS_WORKERS`.
+- Fixed the sandbox image losing its `ENTRYPOINT` in the polyglot merge, which let a rebuilt image report a
+  Job Complete without running the script. The Job template now names its command explicitly.
+- Added `scripts/check_falco.py` (live canary test), five canary payloads in `src/examples/`, and tests in
+  `test_falco_monitor.py`, `test_falco_runner.py`, `test_falco_rules.py` and `test_sandbox_job_template.py`.
+- Not yet verified on a live cluster: run `python -m scripts.check_falco`.
+
 ## 2026-10-12
 - Added a mutex lock to `NonceStore.check_and_record()` (`src/watchdog/verifier.py`)
   to close a check-then-write race between concurrent requests sharing the
