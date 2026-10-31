@@ -88,7 +88,7 @@ class CloudWorker:
                 LOGGER.exception("EKS dry run failed for submission %s", row["id"])
                 result = {"status": "infrastructure_error", "detail": "EKS sandbox unavailable"}
             timings["dry_run_ms"] = round((time.perf_counter() - started) * 1000, 2)
-            for key in ("cloud_ms", "pod_startup_ms", "execution_ms"):
+            for key in ("cloud_ms", "pod_startup_ms", "execution_ms", "monitor_ms"):
                 if key in result:
                     timings[key] = result[key]
 
@@ -97,6 +97,8 @@ class CloudWorker:
                 response = {"delivered": False, "stage": "dry_run", "reason": reason,
                             "execution_location": "eks", "job_name": result.get("job_name"),
                             "timings_ms": timings}
+                if result.get("behaviour"):
+                    response["behaviour"] = result["behaviour"]   # Falco findings, shown by the API and dashboard
                 status_code = 503 if result["status"] == "infrastructure_error" else 422
                 self.notify_failure("dry_run", reason, row["nonce"])
                 self._finish(row, worker_id, response, status_code)
@@ -138,9 +140,12 @@ class CloudWorker:
                 if isinstance(value, str) and len(value) > 16000:
                     endpoint_response[key] = value[:16000] + "\n[output truncated]"
 
-            self._finish(row, worker_id, {"delivered": True,
-                "endpoint_response": endpoint_response, "execution_location": "eks",
-                "job_name": result.get("job_name"), "timings_ms": timings}, 200)
+            delivered = {"delivered": True, "endpoint_response": endpoint_response,
+                         "execution_location": "eks", "job_name": result.get("job_name"),
+                         "timings_ms": timings}
+            if result.get("behaviour"):
+                delivered["behaviour"] = result["behaviour"]
+            self._finish(row, worker_id, delivered, 200)
         finally:
             stop.set()
             heartbeat.join(timeout=1)

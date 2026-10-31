@@ -30,12 +30,14 @@ def main():
     os.environ.setdefault("DASHBOARD_ENABLED", "0")
 
     from waitress import serve
-    from src.gateway.gateway_app import app, SHARED_SECRET
+    from src.gateway.gateway_app import app, SHARED_SECRET, startup_warnings
     from src.resource_manager.resource_manager import resource_manager
 
     if not SHARED_SECRET:
         raise SystemExit("SHARED_SECRET is not set. Copy env.example to .env and fill it in.")
 
+    for note in startup_warnings():
+        print(f"[gateway] WARNING: {note}", flush=True)
     slots = resource_manager.snapshot()["slots"]
     threads = choose_threads(slots, os.environ.get("GATEWAY_THREADS"))
     host = os.environ.get("GATEWAY_HOST", "127.0.0.1")

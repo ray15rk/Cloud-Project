@@ -218,3 +218,92 @@ def test_failed_eks_job_never_forwards(client, monkeypatch):
     result = c.get(response.get_json()["status_url"]).get_json()
     assert result["status_code"] == 422
     assert calls["forwarded"] == []
+
+
+def test_cloud_first_sends_everything_to_eks_even_with_local_capacity(client, monkeypatch):
+    c, calls = client
+    monkeypatch.setattr(gw, "resource_manager", ResourceManager(total_memory_mb=10_000))   # plenty of local room
+    monkeypatch.setattr(gw, "EKS_ENABLED", True)
+    monkeypatch.setattr(gw, "CLOUD_FIRST", True)
+    monkeypatch.setattr(gw, "dry_run", lambda *a, **k: pytest.fail("cloud-first must not run Docker locally"))
+    seen = []
+
+    class FakeRunner:
+        def run(self, payload, submission_id):
+            seen.append(payload)
+            return {"status": "OK", "job_name": "run-test"}
+
+    monkeypatch.setattr(gw, "configured_runner", lambda: FakeRunner())
+    gw.cloud_worker.runner_factory = gw.configured_runner
+    resp = c.post("/submit", json=signed_body())
+    assert resp.status_code == 202 and resp.get_json()["execution_location"] == "eks"
+    assert gw.resource_manager.snapshot()["committed_mb"] == 0
+    gw.cloud_worker._process(gw.cloud_store.claim("w"), "w")
+    assert seen == [b"print('hi')"] and calls["forwarded"] == [b"print('hi')"]
+
+
+def test_hybrid_mode_still_prefers_local(client, monkeypatch):
+    c, calls = client
+    monkeypatch.setattr(gw, "EKS_ENABLED", True)
+    monkeypatch.setattr(gw, "CLOUD_FIRST", False)
+    monkeypatch.setattr(gw, "configured_runner", lambda: pytest.fail("must stay local while there is room"))
+    assert c.post("/submit", json=signed_body()).status_code == 200
+
+
+def test_startup_warnings_flag_settings_that_silently_weaken_the_setup(monkeypatch):
+    for name, value in (("EKS_ENABLED", False), ("EXECUTION_MODE", "cloud"), ("FALCO_ENABLED", True), ("CLOUD_FIRST", False)):
+        monkeypatch.setattr(gw, name, value)
+    notes = " ".join(gw.startup_warnings())
+    assert "EXECUTION_MODE=cloud has no effect" in notes and "FALCO_ENABLED=true has no effect" in notes
+    monkeypatch.setattr(gw, "EKS_ENABLED", True)
+    monkeypatch.setattr(gw, "EXECUTION_MODE", "hybrid")
+    assert "NOT behaviour-monitored" in " ".join(gw.startup_warnings())
+    monkeypatch.setattr(gw, "EXECUTION_MODE", "cloud")
+    monkeypatch.setattr(gw, "CLOUD_FIRST", True)
+    assert gw.startup_warnings() == []
+
+
+def test_threat_detected_is_never_forwarded_and_findings_are_reported(client, monkeypatch):
+    c, calls = client
+    monkeypatch.setattr(gw, "EKS_ENABLED", True)
+    monkeypatch.setattr(gw, "CLOUD_FIRST", True)
+    behaviour = {"engine": "falco", "observed": True, "verdict": "threat", "flooded": False,
+                 "findings": [{"rule": "CP Sandbox Network Socket", "behaviour": "network",
+                               "priority": "Warning", "evidence": "evt.type=socket"}]}
+
+    class FakeRunner:
+        def run(self, payload, submission_id):
+            return {"status": "threat_detected", "job_name": "run-test", "returncode": 0, "behaviour": behaviour,
+                    "detail": "behavioural threat detected by Falco: CP Sandbox Network Socket"}
+
+    monkeypatch.setattr(gw, "configured_runner", lambda: FakeRunner())
+    gw.cloud_worker.runner_factory = gw.configured_runner
+    response = c.post("/submit", json=signed_body())
+    assert response.status_code == 202
+    gw.cloud_worker._process(gw.cloud_store.claim("w"), "w")
+    final = c.get(response.get_json()["status_url"]).get_json()
+    assert final["status_code"] == 422
+    assert final["response"]["delivered"] is False and final["response"]["stage"] == "dry_run"
+    assert final["response"]["reason"].startswith("threat_detected:")
+    assert final["response"]["behaviour"]["findings"][0]["behaviour"] == "network"
+    assert calls["forwarded"] == []                      # never reached the endpoint
+    assert "dry_run" in calls["notified"]                # the central server was told
+
+
+def test_clean_behaviour_verdict_is_reported_on_delivery(client, monkeypatch):
+    c, calls = client
+    monkeypatch.setattr(gw, "EKS_ENABLED", True)
+    monkeypatch.setattr(gw, "CLOUD_FIRST", True)
+
+    class FakeRunner:
+        def run(self, payload, submission_id):
+            return {"status": "OK", "job_name": "run-test",
+                    "behaviour": {"engine": "falco", "observed": True, "verdict": "clean", "findings": []}}
+
+    monkeypatch.setattr(gw, "configured_runner", lambda: FakeRunner())
+    gw.cloud_worker.runner_factory = gw.configured_runner
+    response = c.post("/submit", json=signed_body())
+    gw.cloud_worker._process(gw.cloud_store.claim("w"), "w")
+    final = c.get(response.get_json()["status_url"]).get_json()
+    assert final["status_code"] == 200 and final["response"]["behaviour"]["verdict"] == "clean"
+    assert calls["forwarded"] == [b"print('hi')"]

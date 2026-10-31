@@ -634,7 +634,7 @@ async function refreshHealth(force = false) {
 
     cloudCard.querySelector(".cloud-note").textContent = cloudStatus === "online" ? "Overflow submissions receive HTTP 202 and run as EKS Jobs." : "Submissions that cannot use local capacity are rejected with HTTP 503.";
 
-    const labels = { gateway: ["API gateway", "Verification, routing & delivery"], docker: ["Docker engine", "Linux container runtime"], image: ["Sandbox image", services.image?.name || "Runtime image"], endpoint: ["Endpoint device", "Original payload execution"], central: ["Central server", "Failure notification inbox"], eks: ["AWS EKS", "Cloud overflow execution"] };
+    const labels = { gateway: ["API gateway", "Verification, routing & delivery"], docker: ["Docker engine", "Linux container runtime"], image: ["Sandbox image", services.image?.name || "Runtime image"], endpoint: ["Endpoint device", "Original payload execution"], central: ["Central server", "Failure notification inbox"], eks: ["AWS EKS", "Cloud overflow execution"], falco: ["Behaviour monitor", "Falco syscall detection on EKS"] };
 
     $("#service-list").replaceChildren(...Object.entries(labels).map(([key, [name, description]]) => {
 

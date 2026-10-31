@@ -230,3 +230,19 @@ def test_health_checks_report_actual_dependencies(operator, monkeypatch):
     assert health["image"]["status"] == "ready"
     assert health["endpoint"]["status"] == "online"
     assert health["eks"]["status"] == "disabled"
+
+
+def test_health_reports_the_behaviour_monitor(operator, monkeypatch):
+    client, _, _ = operator
+    monkeypatch.setattr(dashboard.requests, "get", lambda *a, **kw: SimpleNamespace(ok=True, json=lambda: {"status": "ok"}))
+    monkeypatch.setattr(dashboard.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0, stdout="linux\n"))
+    assert client.get("/api/health?refresh=1").json["falco"]["status"] == "not_connected"   # off by default
+    runner = SimpleNamespace(healthy=lambda: True, monitor_healthy=lambda: True)
+    monkeypatch.setattr(gw, "EKS_ENABLED", True)
+    monkeypatch.setattr(gw, "FALCO_ENABLED", True)
+    monkeypatch.setattr(gw, "configured_runner", lambda: runner)
+    assert client.get("/api/health?refresh=1").json["falco"]["status"] == "online"
+    runner.monitor_healthy = lambda: False
+    assert client.get("/api/health?refresh=1").json["falco"]["status"] == "unavailable"
+    monkeypatch.setattr(gw, "configured_runner", lambda: (_ for _ in ()).throw(RuntimeError("no cluster")))
+    assert client.get("/api/health?refresh=1").json["falco"]["status"] == "unavailable"

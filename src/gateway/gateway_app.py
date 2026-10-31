@@ -17,6 +17,7 @@ from flask import Flask, jsonify, request
  
 from src.sandbox.sandbox import dry_run
 from src.sandbox.eks_runner import configured_runner
+from src.sandbox.falco_monitor import monitoring_enabled
 from src.watchdog.verifier import NonceStore, VerificationError, verify_payload
 from src.watchdog.sign import SUPPORTED_LANGUAGES
 from src.resource_manager.resource_manager import resource_manager
@@ -32,6 +33,26 @@ SHARED_SECRET = os.environ.get("SHARED_SECRET", "").encode("utf-8")
 ENDPOINT_URL = os.environ.get("ENDPOINT_URL", "http://127.0.0.1:5000/execute")
 NOTIFY_URL = os.environ.get("NOTIFY_URL", "")  # Central server's failure inbox
 EKS_ENABLED = os.environ.get("EKS_ENABLED", "false").lower() == "true"
+# "hybrid": local Docker first, EKS only as overflow (the original behaviour).
+# "cloud":  every dry run is an EKS Job, so the gateway host runs no untrusted code and every
+#           run can be watched by Falco. Needs EKS_ENABLED=true.
+EXECUTION_MODE = os.environ.get("EXECUTION_MODE", "hybrid").strip().lower()
+CLOUD_FIRST = EKS_ENABLED and EXECUTION_MODE == "cloud"
+# Behavioural detection (Falco) only exists on the EKS path.
+FALCO_ENABLED = monitoring_enabled()
+
+
+def startup_warnings() -> list[str]:
+    """Configuration that silently weakens the setup. Printed by the entry points."""
+    notes = []
+    if EXECUTION_MODE == "cloud" and not EKS_ENABLED:
+        notes.append("EXECUTION_MODE=cloud has no effect without EKS_ENABLED=true; dry runs stay local.")
+    if FALCO_ENABLED and not EKS_ENABLED:
+        notes.append("FALCO_ENABLED=true has no effect without EKS_ENABLED=true; Falco only watches EKS runs.")
+    if FALCO_ENABLED and EKS_ENABLED and not CLOUD_FIRST:
+        notes.append("Hybrid mode: local Docker dry runs are NOT behaviour-monitored; only EKS overflow is. "
+                     "Set EXECUTION_MODE=cloud to monitor every dry run.")
+    return notes
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 256 * 1024
@@ -101,7 +122,8 @@ def process_submission(body: dict, submission_id=None, name="CLI submission.py",
 
     # Stage 2a: capacity check that gates the dry run specifically.
     DRY_RUN_MEMORY_LIMIT = "128m"
-    local_admitted = resource_manager.try_admit(DRY_RUN_MEMORY_LIMIT)
+    # Cloud-first never touches the local slot budget, so nothing here depends on the gateway host's capacity
+    local_admitted = False if CLOUD_FIRST else resource_manager.try_admit(DRY_RUN_MEMORY_LIMIT)
     if not local_admitted and not EKS_ENABLED:
         notify_failure("capacity", "local host at capacity", nonce)
         return {"delivered": False, "stage":"capacity", "reason":"local host at capacity", "timings_ms": timings}, 503
@@ -196,7 +218,8 @@ def tracked_submission(body, name="CLI submission.py", scenario="external"):
     return response, status, event
 
 
-cloud_worker = CloudWorker(cloud_store, activity_store, configured_runner, notify_failure, ENDPOINT_URL)
+cloud_worker = CloudWorker(cloud_store, activity_store, configured_runner, notify_failure, ENDPOINT_URL,
+                           max_workers=int(os.environ.get("EKS_WORKERS", "2")))
 
 
 if os.environ.get("DASHBOARD_ENABLED", "1") == "1":
@@ -236,6 +259,8 @@ def submission_status(submission_id):
 if __name__ == "__main__":
     if not SHARED_SECRET:
         raise SystemExit("SHARED_SECRET is not set. Copy .env.example to .env and fill it in.")
+    for note in startup_warnings():
+        print(f"[gateway] WARNING: {note}")
     if EKS_ENABLED:
         cloud_worker.start()
     app.run(port=8000)

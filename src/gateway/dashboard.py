@@ -361,6 +361,13 @@ def register_dashboard(app, gateway):
                 except Exception:
 
                     services["eks"] = {"status": "unavailable"}
+            if not gateway.EKS_ENABLED or not gateway.FALCO_ENABLED:
+                services["falco"] = {"status": "not_connected"}
+            else:
+                try:
+                    services["falco"] = {"status": "online" if gateway.configured_runner().monitor_healthy() else "unavailable"}
+                except Exception:
+                    services["falco"] = {"status": "unavailable"}
             health_cache.update(checked=time.monotonic(), value=services)
 
             return jsonify(services)
