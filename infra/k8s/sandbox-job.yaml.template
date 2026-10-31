@@ -32,6 +32,11 @@ spec:
         - name: sandbox
           image: IMAGE_DIGEST
           imagePullPolicy: IfNotPresent
+          # Explicit on purpose. Without a command, an image that lost its ENTRYPOINT would run the
+          # base image's default python, which exits 0 having run nothing, and the Job would report
+          # Complete. runner.py is also what the Falco "observed" rule looks for.
+          command: ["python", "-I", "-B", "-u", "/sandbox/runner.py"]
+          args: ["python3", "-I", "-B", "-u", "/sandbox/script.py"]
           resources:
             requests:
               cpu: 500m

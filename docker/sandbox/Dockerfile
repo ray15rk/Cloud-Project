@@ -20,4 +20,7 @@ COPY --chmod=0444 runner.py /sandbox/runner.py
 USER 65534:65534
 
 # Payloads are mounted separately for each run, never baked into the image.
-# Command and script target are appended dynamically by sandbox.py based on payload language.
+# runner.py enforces the 10-second deadline and the 64 KiB output cap. It accepts a full command
+# (docker run ... python3 -I -B -u /sandbox/script.py) or just a script path.
+ENTRYPOINT ["python", "-I", "-B", "-u", "/sandbox/runner.py"]
+CMD ["/sandbox/script.py"]
