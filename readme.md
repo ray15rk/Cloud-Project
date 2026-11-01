@@ -140,6 +140,10 @@ Both Python and Bash have direct, symmetrical test cases:
 | **Filesystem Breakout Probe** | — | `filesystem_breakout.sh` | Dropped / read-only error (`--read-only`) |
 | **PowerShell Golden Path** | — | `good.ps1` | `HTTP 200 OK` (executed on endpoint) |
 
+The PowerShell result above applies to the local sandbox path. In cloud-first mode, the current
+Falco policy blocks even a harmless PowerShell run because its runtime generates file and network
+events. Python and Bash have passed the cloud-first live path; see the [Falco setup guide](docs/falco-setup.md).
+
 ### 3.3 Security Boundary & Adversarial Matrix
 
 The disposable sandbox enforces strict multi-layered isolation parameters. The following boundaries have been validated with real adversarial code:
@@ -307,19 +311,21 @@ When local memory capacity (default: 2 slots / 256 MB) is exceeded, the gateway 
 2. **Configuration (`.env`):**
    ```dotenv
    EKS_ENABLED=true
-   EKS_CLUSTER=cloudproject-sandbox-lab
-   EKS_CONTEXT=cloudproject-sandbox-lab
-   EKS_NODEGROUP=sandbox-workers
+   EKS_CLUSTER=cloudproject-sandbox-sydney
+   EKS_CONTEXT=cloudproject-sandbox-sydney
+   EKS_NODEGROUP=cloudproject-sandbox-nodes
    EKS_MAX_INFLIGHT=3
    LOCAL_MEMORY_BUDGET_MB=256
+   EXECUTION_MODE=cloud
+   FALCO_ENABLED=true
    ```
 3. **Execution Behavior:**
    * Synchronous local requests finish immediately.
    * Overflowed requests return **`HTTP 202 Accepted`** with a `status_url`.
    * Clients poll `/submissions/<id>` until the EKS Job completes and the verified payload is forwarded to the local endpoint.
    * Worker node capacity is managed dynamically in-cluster via **Kubernetes Cluster Autoscaler**.
-4. **Cloud-first mode (optional):** set `EXECUTION_MODE=cloud` to send *every* dry run to EKS, so the
-   gateway host runs no untrusted code. The default `hybrid` keeps local Docker as the fast path.
+4. **Cloud-first mode:** `EXECUTION_MODE=cloud` sends *every* dry run to EKS, matching the current
+   report flow. `EXECUTION_MODE=hybrid` uses local Docker first and EKS for overflow.
    `EKS_WORKERS` sets how many Jobs run at once.
 
 For cloud setup details, see:
@@ -352,3 +358,7 @@ python -m src.sender.send src/examples/network_swallowed.py   # exits 0 itself, 
 
 Install steps, the rule table, tuning, troubleshooting and limits: [Falco setup guide](docs/falco-setup.md).
 Rules and policy lists: [`infra/falco/cloudproject_rules.yaml`](infra/falco/cloudproject_rules.yaml).
+The cloud-first path currently accepts clean Python and Bash submissions. PowerShell remains blocked
+pending a safe way to separate runtime startup events from script behavior. Falco log delivery has also
+caused intermittent clean-run HTTP 503 failures during live testing; treat those as infrastructure
+failures, not unsafe-script verdicts.

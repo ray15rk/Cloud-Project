@@ -22,6 +22,7 @@ def test_queue_limit_and_restart_claim(tmp_path):
     row = recovered.claim("worker-1")
     assert row["id"] == first
     assert row["payload"] == b"print(1)"
+    assert row["language"] == "python"
     assert recovered.renew(first, "worker-1")
     assert recovered.begin_forward(first, "worker-1")
     assert recovered.finish(first, "worker-1", {"delivered": True}, 200)
@@ -60,3 +61,18 @@ def test_expired_running_lease_can_be_recovered(tmp_path):
     assert recovered.claim("new-worker")["id"] == submission_id
     assert not recovered.begin_forward(submission_id, "old-worker")
     assert recovered.begin_forward(submission_id, "new-worker")
+
+
+def test_language_is_preserved_and_existing_queue_is_migrated(tmp_path):
+    path = tmp_path / "cloud.sqlite3"
+    with sqlite3.connect(path) as db:
+        db.execute("""CREATE TABLE cloud_submissions (
+            id TEXT PRIMARY KEY, nonce TEXT NOT NULL UNIQUE, payload BLOB,
+            name TEXT NOT NULL, scenario TEXT NOT NULL, created_at REAL NOT NULL,
+            updated_at REAL NOT NULL, state TEXT NOT NULL, worker_id TEXT,
+            lease_until REAL, verify_ms REAL NOT NULL, status_code INTEGER,
+            response_json TEXT)""")
+    store = CloudSubmissionStore(path)
+    submission_id = uuid.uuid4().hex
+    store.enqueue(submission_id, "nonce", b"echo hi", "one.sh", "test", 1.0, language="bash")
+    assert store.claim("worker")["language"] == "bash"

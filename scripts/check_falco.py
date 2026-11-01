@@ -1,6 +1,6 @@
 """Live check of the Falco behaviour monitor against your EKS cluster.   python -m scripts.check_falco
 
-Runs small canary scripts as REAL EKS Jobs (one at a time, Python only) and checks the verdict.
+Runs small canary scripts as REAL EKS Jobs (one at a time) and checks the verdict.
 Every canary exits 0, so an exit-code check alone would call them all clean. Needs:
   * EKS_IMAGE, EKS_CONTEXT and working AWS/kube credentials (same as the gateway)
   * FALCO_ENABLED=true in .env, with Falco installed as described in docs/falco-setup.md
@@ -24,23 +24,25 @@ from src.sandbox.falco_monitor import monitoring_enabled  # noqa: E402
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "src" / "examples"
 
-# name, example file, expected status, expected behaviour class, required?
+# name, example file, language, expected status, expected behaviour class, required?
 CANARIES = [
-    ("benign",             "good.py",                "OK",              None,          True),
-    ("network_swallowed",  "network_swallowed.py",   "threat_detected", "network",     True),
-    ("exec_child",         "exec_child.py",          "threat_detected", "process",     True),
-    ("fs_write_swallowed", "fs_write_swallowed.py",  "threat_detected", "filesystem",  True),
-    ("credential_probe",   "credential_probe.py",    "threat_detected", "credentials", True),
+    ("benign",             "good.py",                "python",     "OK",              None,          True),
+    ("network_swallowed",  "network_swallowed.py",   "python",     "threat_detected", "network",     True),
+    ("exec_child",         "exec_child.py",          "python",     "threat_detected", "process",     True),
+    ("fs_write_swallowed", "fs_write_swallowed.py",  "python",     "threat_detected", "filesystem",  True),
+    ("credential_probe",   "credential_probe.py",    "python",     "threat_detected", "credentials", True),
     # Informational: seccomp can deny these before Falco's probe sees them, so a miss is a warning.
-    ("privileged_syscall", "privileged_syscall.py",  "threat_detected", "privilege",   False),
+    ("privileged_syscall", "privileged_syscall.py",  "python",     "threat_detected", "privilege",   False),
+    ("benign_bash",        "good.sh",                "bash",       "OK",              None,          False),
+    ("benign_powershell",  "good.ps1",               "powershell", "OK",              None,          False),
 ]
 
 
-def run_canary(runner, name, filename, want_status, want_behaviour, required):
+def run_canary(runner, name, filename, language, want_status, want_behaviour, required):
     payload = (EXAMPLES / filename).read_bytes()
     started = time.monotonic()
     try:
-        result = runner.run(payload, uuid.uuid4().hex)
+        result = runner.run(payload, uuid.uuid4().hex, language)
     except Exception as exc:  # infrastructure problem, not a verdict
         return {"name": name, "ok": False, "required": required, "status": "exception",
                 "detail": f"{type(exc).__name__}: {exc}", "seconds": round(time.monotonic() - started, 1)}
@@ -67,10 +69,10 @@ def main():
 
     runner = configured_runner()
     results = []
-    for name, filename, want_status, want_behaviour, required in chosen:
+    for name, filename, language, want_status, want_behaviour, required in chosen:
         if not args.json:
             print(f"running {name} ...", flush=True)
-        results.append(run_canary(runner, name, filename, want_status, want_behaviour, required))
+        results.append(run_canary(runner, name, filename, language, want_status, want_behaviour, required))
 
     if args.json:
         print(json.dumps(results, indent=2))

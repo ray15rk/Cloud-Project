@@ -24,6 +24,7 @@ def client(monkeypatch, tmp_path):
     # Fresh secret and nonce store for every test, and record what the gateway does
     monkeypatch.setattr(gw, "SHARED_SECRET", SECRET)
     monkeypatch.setattr(gw, "EKS_ENABLED", False)
+    monkeypatch.setattr(gw, "CLOUD_FIRST", False)
     monkeypatch.setattr(gw, "nonce_store", NonceStore())
     monkeypatch.setattr(gw, "activity_store", ActivityStore(tmp_path / "activity.sqlite3"))
     monkeypatch.setattr(gw, "cloud_store", CloudSubmissionStore(tmp_path / "cloud.sqlite3"))
@@ -32,7 +33,7 @@ def client(monkeypatch, tmp_path):
     # Tests check HMAC/repay/forwarding logic instead of capacity behaviour, so that need enough room that admission always succeeds 
     # Only dont successed if test deliberatyl serts right budget itself
     monkeypatch.setattr(gw, "resource_manager", ResourceManager(total_memory_mb=10_000)) 
-    calls = {"forwarded": [], "notified": [], "dry_run": "OK"}
+    calls = {"forwarded": [], "forward_headers": [], "notified": [], "dry_run": "OK"}
 
     def fake_dry_run(payload, memory_limit=None, **kwargs):
         status = calls["dry_run"]
@@ -40,6 +41,7 @@ def client(monkeypatch, tmp_path):
 
     def fake_post(url, data=None, **kwargs):
         calls["forwarded"].append(data)
+        calls["forward_headers"].append(kwargs.get("headers", {}))
         return FakeResponse()
 
     monkeypatch.setattr(gw, "dry_run", fake_dry_run)
@@ -167,8 +169,8 @@ def test_verified_overflow_uses_eks_and_forwards_only_after_success(client, monk
     cloud_payloads = []
 
     class FakeRunner:
-        def run(self, payload, submission_id):
-            cloud_payloads.append(payload)
+        def run(self, payload, submission_id, language):
+            cloud_payloads.append((payload, language))
             return {"status": "OK", "job_name": "run-test"}
 
     monkeypatch.setattr(gw, "configured_runner", lambda: FakeRunner())
@@ -183,8 +185,9 @@ def test_verified_overflow_uses_eks_and_forwards_only_after_success(client, monk
     result = c.get(response.get_json()["status_url"]).get_json()
     assert result["status_code"] == 200
     assert result["response"]["delivered"] is True
-    assert cloud_payloads == [b"print('hi')"]
+    assert cloud_payloads == [(b"print('hi')", "python")]
     assert calls["forwarded"] == [b"print('hi')"]
+    assert calls["forward_headers"][0]["X-Payload-Language"] == "python"
     assert manager.snapshot()["committed_mb"] == 0
 
 
@@ -205,7 +208,7 @@ def test_failed_eks_job_never_forwards(client, monkeypatch):
     monkeypatch.setattr(gw, "EKS_ENABLED", True)
 
     class FakeRunner:
-        def run(self, payload, submission_id):
+        def run(self, payload, submission_id, language):
             return {"status": "oom_killed", "detail": "128Mi", "job_name": "run-failed"}
 
     monkeypatch.setattr(gw, "configured_runner", lambda: FakeRunner())
@@ -229,7 +232,7 @@ def test_cloud_first_sends_everything_to_eks_even_with_local_capacity(client, mo
     seen = []
 
     class FakeRunner:
-        def run(self, payload, submission_id):
+        def run(self, payload, submission_id, language):
             seen.append(payload)
             return {"status": "OK", "job_name": "run-test"}
 
@@ -272,7 +275,7 @@ def test_threat_detected_is_never_forwarded_and_findings_are_reported(client, mo
                                "priority": "Warning", "evidence": "evt.type=socket"}]}
 
     class FakeRunner:
-        def run(self, payload, submission_id):
+        def run(self, payload, submission_id, language):
             return {"status": "threat_detected", "job_name": "run-test", "returncode": 0, "behaviour": behaviour,
                     "detail": "behavioural threat detected by Falco: CP Sandbox Network Socket"}
 
@@ -296,7 +299,7 @@ def test_clean_behaviour_verdict_is_reported_on_delivery(client, monkeypatch):
     monkeypatch.setattr(gw, "CLOUD_FIRST", True)
 
     class FakeRunner:
-        def run(self, payload, submission_id):
+        def run(self, payload, submission_id, language):
             return {"status": "OK", "job_name": "run-test",
                     "behaviour": {"engine": "falco", "observed": True, "verdict": "clean", "findings": []}}
 
@@ -307,3 +310,25 @@ def test_clean_behaviour_verdict_is_reported_on_delivery(client, monkeypatch):
     final = c.get(response.get_json()["status_url"]).get_json()
     assert final["status_code"] == 200 and final["response"]["behaviour"]["verdict"] == "clean"
     assert calls["forwarded"] == [b"print('hi')"]
+
+
+def test_bash_language_is_preserved_on_cloud_path(client, monkeypatch):
+    c, calls = client
+    monkeypatch.setattr(gw, "resource_manager", ResourceManager(total_memory_mb=1))
+    monkeypatch.setattr(gw, "EKS_ENABLED", True)
+
+    class FakeRunner:
+        def run(self, payload, submission_id, language):
+            assert language == "bash"
+            return {"status": "OK", "job_name": "run-bash"}
+
+    monkeypatch.setattr(gw, "configured_runner", lambda: FakeRunner())
+    gw.cloud_worker.runner_factory = gw.configured_runner
+    response = c.post("/submit", json=signed_body(b"echo hi", language="bash"))
+    assert response.status_code == 202
+    row = gw.cloud_store.claim("test-worker")
+    assert row["language"] == "bash"
+    gw.cloud_worker._process(row, "test-worker")
+    result = c.get(response.get_json()["status_url"]).get_json()
+    assert result["status_code"] == 200
+    assert calls["forward_headers"][0]["X-Payload-Language"] == "bash"

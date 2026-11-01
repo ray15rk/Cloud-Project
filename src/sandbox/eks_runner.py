@@ -18,6 +18,7 @@ from src.sandbox.falco_monitor import FalcoMonitor, MonitorError, monitoring_ena
 NAMESPACE = "cloudproject-sandbox"
 TEMPLATE = Path(__file__).resolve().parents[2] / "infra" / "k8s" / "sandbox-job.yaml.template"
 LOGGER = logging.getLogger(__name__)
+SCRIPT_EXTENSIONS = {"python": "py", "bash": "sh", "powershell": "ps1"}
 
 
 class EKSRunner:
@@ -53,7 +54,7 @@ class EKSRunner:
                 raise error
             raise
 
-    def _create_configmap(self, core, name, payload, submission_id):
+    def _create_configmap(self, core, name, payload, submission_id, script_name):
         digest = hashlib.sha256(payload).hexdigest()
         body = {
             "apiVersion": "v1",
@@ -64,7 +65,7 @@ class EKSRunner:
                 "labels": {"app": "cloudproject-sandbox", "submission-id": submission_id},
                 "annotations": {"cloudproject/payload-sha256": digest},
             },
-            "binaryData": {"script.py": base64.b64encode(payload).decode("ascii")},
+            "binaryData": {script_name: base64.b64encode(payload).decode("ascii")},
             "immutable": True,
         }
         try:
@@ -76,13 +77,24 @@ class EKSRunner:
                 raise RuntimeError("existing payload ConfigMap does not match submission") from exc
             return existing
 
-    def _create_job(self, batch, name, configmap_name, submission_id):
+    def _create_job(self, batch, name, configmap_name, submission_id, script_name="script.py"):
         manifest = yaml.safe_load(TEMPLATE.read_text())
         manifest["metadata"].update(name=name, labels={
             "app": "cloudproject-sandbox", "submission-id": submission_id,
         })
-        manifest["spec"]["template"]["spec"]["containers"][0]["image"] = self.image
+        container = manifest["spec"]["template"]["spec"]["containers"][0]
+        container["image"] = self.image
+        commands = {
+            "py": ["python3", "-I", "-B", "-u", f"/sandbox/{script_name}"],
+            "sh": ["bash", f"/sandbox/{script_name}"],
+            "ps1": ["pwsh", "-NoProfile", "-File", f"/sandbox/{script_name}"],
+        }
+        container["args"] = commands[script_name.rsplit(".", 1)[-1]]
+        container["volumeMounts"][0]["mountPath"] = f"/sandbox/{script_name}"
+        container["volumeMounts"][0]["subPath"] = script_name
         manifest["spec"]["template"]["spec"]["volumes"][0]["configMap"]["name"] = configmap_name
+        manifest["spec"]["template"]["spec"]["volumes"][0]["configMap"]["items"] = [
+            {"key": script_name, "path": script_name}]
         try:
             return self._call(batch.create_namespaced_job, NAMESPACE, manifest)
         except Exception as exc:
@@ -157,27 +169,42 @@ class EKSRunner:
             result.update(status="infrastructure_error",
                           detail="Falco did not report the sandbox starting, so the run cannot be called clean")
 
-    def run(self, payload: bytes, submission_id: str) -> dict:
+    def run(self, payload: bytes, submission_id: str, language: str = "python") -> dict:
         if len(payload) > 65536:
             raise ValueError("payload exceeds 64 KiB")
         if len(submission_id) != 32 or any(character not in "0123456789abcdef" for character in submission_id):
             raise ValueError("submission ID must be a lowercase UUID hex value")
+        if language not in SCRIPT_EXTENSIONS:
+            raise ValueError("unsupported payload language")
         started = time.monotonic()
         job_name = f"run-{submission_id[:24]}"
         configmap_name = f"script-{submission_id[:24]}"
-        core, batch = self._clients()
+        script_name = f"script.{SCRIPT_EXTENSIONS[language]}"
+        stage = "Kubernetes client setup"
+        try:
+            core, batch = self._clients()
+        except Exception:
+            LOGGER.exception("EKS submission %s failed during %s", submission_id, stage)
+            raise
         created_configmap = False
         job_owned = False
         try:
-            self._create_configmap(core, configmap_name, payload, submission_id)
+            stage = "payload ConfigMap creation"
+            self._create_configmap(core, configmap_name, payload, submission_id, script_name)
             created_configmap = True
-            job = self._create_job(batch, job_name, configmap_name, submission_id)
+            stage = "Job creation"
+            job = self._create_job(batch, job_name, configmap_name, submission_id, script_name)
             job_owned = True
             owner = {"apiVersion": "batch/v1", "kind": "Job", "name": job_name,
                      "uid": job.metadata.uid, "controller": False, "blockOwnerDeletion": False}
+            stage = "ConfigMap owner update"
             self._call(core.patch_namespaced_config_map, configmap_name, NAMESPACE,
                        {"metadata": {"ownerReferences": [owner]}})
+            stage = "Job result collection"
             return self._result(core, batch, job_name, started)
+        except Exception:
+            LOGGER.exception("EKS submission %s failed during %s", submission_id, stage)
+            raise
         finally:
             if job_owned:
                 try:

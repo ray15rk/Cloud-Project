@@ -131,7 +131,8 @@ def process_submission(body: dict, submission_id=None, name="CLI submission.py",
     if not local_admitted:
         submission_id = submission_id or uuid.uuid4().hex
         try:
-            cloud_store.enqueue(submission_id, message["nonce"], payload, name, scenario, timings["verify_ms"])
+            cloud_store.enqueue(submission_id, message["nonce"], payload, name, scenario,
+                                timings["verify_ms"], language=message["language"])
         except CloudCapacityError:
             notify_failure("capacity", "EKS submission limit reached", nonce)
             return {"delivered": False, "stage": "capacity", "reason": "EKS submission limit reached",

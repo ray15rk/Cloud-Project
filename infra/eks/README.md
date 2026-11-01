@@ -61,11 +61,11 @@ The sandbox image is stored in the Sydney ECR repository. Use the image's
 immutable digest rather than a mutable tag:
 
 ```text
-562358727339.dkr.ecr.ap-southeast-2.amazonaws.com/cloudproject-sandbox@sha256:ea1f0713883b312c27f9465700f049e469d4627ac96304a4cb7fd4f9e711cf01
+562358727339.dkr.ecr.ap-southeast-2.amazonaws.com/cloudproject-sandbox@sha256:a2a31397c0f6a17856138c71ad14300b1e592ccc46e3ee0f61d7167911c5bffa
 ```
 
-This is the digest used for the initial successful smoke test. Update
-`EKS_IMAGE` when a new image is built and pushed.
+This digest is the current Python/Bash/PowerShell sandbox image, verified in ECR on
+2026-11-01. Update `EKS_IMAGE` when a new image is built and pushed.
 
 ## Run the gateway on this Mac
 
@@ -76,8 +76,10 @@ Keep AWS credentials outside the repository. Set these values in the gitignored
 LOCAL_MEMORY_BUDGET_MB=256
 EKS_ENABLED=true
 EKS_CONTEXT=cloudproject-sandbox-sydney
-EKS_IMAGE=562358727339.dkr.ecr.ap-southeast-2.amazonaws.com/cloudproject-sandbox@sha256:ea1f0713883b312c27f9465700f049e469d4627ac96304a4cb7fd4f9e711cf01
+EKS_IMAGE=562358727339.dkr.ecr.ap-southeast-2.amazonaws.com/cloudproject-sandbox@sha256:a2a31397c0f6a17856138c71ad14300b1e592ccc46e3ee0f61d7167911c5bffa
 EKS_MAX_INFLIGHT=3
+EXECUTION_MODE=cloud
+FALCO_ENABLED=true
 AWS_REGION=ap-southeast-2
 AWS_PROFILE=cloudproject-sydney
 KUBECONFIG=/Users/rance/.kube/config-cloudproject-sydney
@@ -97,16 +99,17 @@ Open `http://127.0.0.1:8000`. With the project's Nginx proxy running on port
 .venv/bin/python -m src.sender.send src/examples/good.py
 ```
 
-To demonstrate cloud bursting, restart the dashboard with a temporary low local
-memory budget:
+With `EXECUTION_MODE=cloud`, every dry run is an EKS Job. To demonstrate the
+older hybrid overflow mode, restart the dashboard with a temporary low local
+memory budget and `EXECUTION_MODE=hybrid`:
 
 ```sh
-LOCAL_MEMORY_BUDGET_MB=1 .venv/bin/python -m src.dashboard
+EXECUTION_MODE=hybrid LOCAL_MEMORY_BUDGET_MB=1 .venv/bin/python -m src.dashboard
 ```
 
-The submission should first return HTTP 202 while the EKS Job is queued, then
-return a completed result with `execution_location: eks`. Restart the dashboard
-normally afterward to restore the configured local memory budget.
+Cloud-first and overflow submissions first return HTTP 202 while the EKS Job is
+queued, then return a completed result with `execution_location: eks`. Restart
+the dashboard normally afterward to restore the configured cloud-first mode.
 
 The gateway's cloud path and Cluster Autoscaler's node scaling are separate:
 the gateway chooses EKS when local capacity is insufficient; Cluster Autoscaler
@@ -120,6 +123,13 @@ adds a worker node only when Kubernetes cannot schedule a Pod on existing nodes.
 - After the workload was deleted, Cluster Autoscaler removed the extra node.
 - A gateway submission completed successfully through EKS and returned
   `execution_location: eks`.
+- On 2026-11-01, clean Python and Bash submissions completed through the real
+  sender, NGINX, gateway, EKS Job, and local endpoint. A network-attempt script
+  was rejected by Falco before endpoint delivery.
+- Intermittent clean-run HTTP 503 failures were also observed: some Falco start
+  markers arrived too late for the earlier gateway poll window, and a separate
+  short EKS runner failure has not yet been diagnosed. Treat this path as a
+  working integration with an open reliability issue, not as fully validated.
 
 ## Costs and shutdown
 

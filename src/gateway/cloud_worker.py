@@ -83,7 +83,7 @@ class CloudWorker:
         started = time.perf_counter()
         try:
             try:
-                result = self.runner_factory().run(row["payload"], row["id"])
+                result = self.runner_factory().run(row["payload"], row["id"], row["language"])
             except Exception:
                 LOGGER.exception("EKS dry run failed for submission %s", row["id"])
                 result = {"status": "infrastructure_error", "detail": "EKS sandbox unavailable"}
@@ -112,7 +112,8 @@ class CloudWorker:
             try:
                 response = requests.post(
                     self.endpoint_url, data=row["payload"],
-                    headers={"Content-Type": "application/octet-stream"}, timeout=15,
+                    headers={"Content-Type": "application/octet-stream",
+                             "X-Payload-Language": row["language"]}, timeout=15,
                 )
                 response.raise_for_status()
                 endpoint_response = response.json()

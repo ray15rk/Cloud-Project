@@ -37,6 +37,16 @@ spec:
           # Complete. runner.py is also what the Falco "observed" rule looks for.
           command: ["python", "-I", "-B", "-u", "/sandbox/runner.py"]
           args: ["python3", "-I", "-B", "-u", "/sandbox/script.py"]
+          # PowerShell/.NET needs a writable home for its startup files. Keep it in RAM.
+          env:
+            - name: HOME
+              value: /tmp
+            - name: XDG_CONFIG_HOME
+              value: /tmp/.config
+            - name: DOTNET_CLI_HOME
+              value: /tmp
+            - name: POWERSHELL_TELEMETRY_OPTOUT
+              value: "1"
           resources:
             requests:
               cpu: 500m
@@ -55,8 +65,14 @@ spec:
               mountPath: /sandbox/script.py
               subPath: script.py
               readOnly: true
+            - name: scratch
+              mountPath: /tmp
       volumes:
         - name: script
           configMap:
             name: CONFIGMAP_NAME
             defaultMode: 0444
+        - name: scratch
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi

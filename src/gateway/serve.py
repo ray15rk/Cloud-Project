@@ -10,6 +10,7 @@ False, so cloud bursting would never trigger. (waitress defaults to 4 threads, w
 4 slots, so the default would silently hide overflow.)
 """
 import os
+import logging
 
 MAX_BODY_BYTES = 256 * 1024  # same limit as gateway_app's MAX_CONTENT_LENGTH
 
@@ -25,6 +26,7 @@ def choose_threads(slots: int, requested: str | None) -> int:
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     # The NGINX-fronted process serves submissions and their status. Set BEFORE importing gateway_app so the
     # operator dashboard routes are never registered and cannot be exposed by a proxy mistake.
     os.environ.setdefault("DASHBOARD_ENABLED", "0")

@@ -154,7 +154,7 @@ EXECUTION_MODE=cloud
 python -m scripts.check_falco
 ```
 
-It runs six small scripts as real EKS Jobs, one at a time. Each waits for a Job to start and run, then a few
+It runs eight small scripts as real EKS Jobs, one at a time. Each waits for a Job to start and run, then a few
 seconds for alerts, so allow tens of seconds per canary; the first can be slower while an image pulls or a
 node starts. EKS timings have not been measured yet, so treat that as a rough guide. Every canary exits 0.
 
@@ -166,6 +166,8 @@ node starts. EKS timings have not been measured yet, so treat that as a rough gu
 | `fs_write_swallowed` | `threat_detected` | `filesystem` |
 | `credential_probe` | `threat_detected` | `credentials` |
 | `privileged_syscall` | `threat_detected` | `privilege` (**informational**: a miss is a WARN) |
+| `benign_bash` | `OK` | none (**informational**) |
+| `benign_powershell` | `OK` | none (**informational**; currently WARN on this cluster) |
 
 Output looks like `[PASS] network_swallowed  status=threat_detected  behaviours=network ...`. The script
 exits non-zero if a required canary does not match. Use `--only network_swallowed` to run one, `--json`
@@ -200,8 +202,10 @@ settings detection depends on.
 - **Add a language.** When Bash or PowerShell run on EKS, the interpreters are already allowed. PowerShell
   may write under its home directory and start helper processes, which will show up as findings until you
   allow them or give it a writable scratch volume.
-- **Wait times.** `FALCO_SETTLE_SECONDS` (default 3) is how long the gateway waits after the Job ends for
-  late alerts. `FALCO_WAIT_SECONDS` (default 20) is how long it waits for the "observed" alert.
+- **Wait times.** `FALCO_SETTLE_SECONDS` (default 3) is how long the gateway waits after the Job ends and
+  again after the first observed marker for late alerts. `FALCO_WAIT_SECONDS` (default 120) is how long it
+  waits for the "observed" alert.
+  The log query includes at least 120 seconds because a shorter EKS log window excluded fresh alerts.
 
 ## Troubleshooting
 
@@ -227,10 +231,21 @@ settings detection depends on.
 - **Dropped events.** Under extreme load Falco can drop syscall events. The "observed" check proves
   Falco saw the start, not that it saw everything.
 - **Alert visibility.** Anyone who can read the Falco log can see sandbox command lines in the evidence.
-- **Not verified here.** The rules use only fields and events that appear in the official Falco rules,
-  and tests enforce that. The rules were not run against a live Falco while this was written, so step 8
-  is the real proof on your cluster.
-- **Language support.** EKS Jobs still run Python only; Bash and PowerShell use the local path.
+- **Live verification (2026-11-01).** On `cloudproject-sandbox-sydney`, the clean Python and Bash
+  canaries passed; network, process, filesystem, credential, and privileged syscall canaries were
+  detected. The real sender, NGINX, gateway, EKS/Falco, and local edge endpoint delivered clean Python
+  and Bash submissions (HTTP 200). A network-attempt submission was rejected (HTTP 422); the endpoint
+  log showed no request for it. Some clean runs also failed closed with HTTP 503 because the Falco
+  start marker appeared too late for the gateway's earlier log polling window. Another submission
+  briefly failed before a Job result was available. The longer wait reduces timing failures, but
+  sustained multi-run reliability has not yet been demonstrated.
+- **PowerShell is not ready for clean delivery.** Its Job now starts with a small in-memory `/tmp`,
+  but the PowerShell runtime itself opens network sockets and writes startup files. Falco correctly
+  blocks the current benign PowerShell canary. Do not exempt all `pwsh` network activity; that would
+  also hide a payload's network attempts. Keep PowerShell submissions blocked until its runtime noise
+  can be separated safely from payload behaviour and verified with live canaries.
+- **Language handoff.** The gateway stores the signed language with each queued submission and passes
+  it to the EKS Job and edge endpoint. Python and Bash have passed live canaries.
 - **Resources.** Falco runs on every node and uses memory the sandboxes could have used.
 
 ## Remove or roll back

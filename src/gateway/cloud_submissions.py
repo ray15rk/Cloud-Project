@@ -27,15 +27,20 @@ class CloudSubmissionStore:
         db.execute("PRAGMA secure_delete=ON")
         db.execute("""CREATE TABLE IF NOT EXISTS cloud_submissions (
             id TEXT PRIMARY KEY, nonce TEXT NOT NULL UNIQUE,
-            payload BLOB, name TEXT NOT NULL, scenario TEXT NOT NULL,
+            payload BLOB, language TEXT NOT NULL DEFAULT 'python',
+            name TEXT NOT NULL, scenario TEXT NOT NULL,
             created_at REAL NOT NULL, updated_at REAL NOT NULL,
             state TEXT NOT NULL, worker_id TEXT, lease_until REAL,
             verify_ms REAL NOT NULL, status_code INTEGER,
             response_json TEXT
         )""")
+        columns = {row[1] for row in db.execute("PRAGMA table_info(cloud_submissions)")}
+        if "language" not in columns:
+            db.execute("ALTER TABLE cloud_submissions ADD COLUMN language TEXT NOT NULL DEFAULT 'python'")
+            db.commit()
         return db
 
-    def enqueue(self, submission_id, nonce, payload, name, scenario, verify_ms):
+    def enqueue(self, submission_id, nonce, payload, name, scenario, verify_ms, language="python"):
         now = time.time()
         with closing(self._connect()) as db:
             db.execute("BEGIN IMMEDIATE")
@@ -46,9 +51,9 @@ class CloudSubmissionStore:
                 db.rollback()
                 raise CloudCapacityError("EKS submission limit reached")
             db.execute("""INSERT INTO cloud_submissions
-                (id, nonce, payload, name, scenario, created_at, updated_at, state, verify_ms)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?)""",
-                (submission_id, nonce, payload, name, scenario, now, now, verify_ms))
+                (id, nonce, payload, language, name, scenario, created_at, updated_at, state, verify_ms)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)""",
+                (submission_id, nonce, payload, language, name, scenario, now, now, verify_ms))
             db.commit()
 
     def claim(self, worker_id):

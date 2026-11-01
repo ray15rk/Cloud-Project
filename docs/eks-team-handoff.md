@@ -2,10 +2,10 @@
 
 ## What runs where
 
-This is a hybrid local/cloud demonstration. The gateway, dashboard, Nginx proxy,
-local Docker sandbox, endpoint, and notification server run on the operator's
-computer. The EKS cluster `cloudproject-sandbox-sydney` runs in AWS region
-`ap-southeast-2`.
+This is a cloud-first dry-run demonstration. The gateway, dashboard, Nginx
+proxy, endpoint, and notification server run on the operator's computer. The
+EKS cluster `cloudproject-sandbox-sydney` runs dry-run Jobs in AWS region
+`ap-southeast-2`. Hybrid local Docker overflow remains available as an optional mode.
 
 ```text
 Browser / sender CLI
@@ -16,22 +16,21 @@ Local Nginx proxy on 127.0.0.1:8080
        v
 Local gateway on 127.0.0.1:8000 -- verifies the signed payload
        |
-       +-- local capacity available --> local Docker dry run
-       |
-       +-- local capacity full -------> EKS Job dry run in AWS
-                                          |
+       +------------------------------> EKS Job dry run in AWS
+                                          | Falco observes on the EKS node
                                           v
-                                    result returned
+                                    result and verdict returned
        |
        v
 Local endpoint on 127.0.0.1:5000 -- receives a successful payload
 ```
 
-The gateway chooses whether a verified dry run uses local Docker or EKS. An
-overflow submission initially receives HTTP 202 while its EKS Job runs. After
-a successful dry run, the gateway forwards the original verified payload to
-the local endpoint and returns the final result. The default limit is three
-outstanding cloud submissions.
+With `EXECUTION_MODE=cloud`, every verified submission is queued for an EKS
+dry-run Job and initially receives HTTP 202. After a clean result, the gateway
+forwards the original payload to the local endpoint. A detected threat or an
+unavailable monitor blocks delivery. The default limit is three outstanding
+cloud submissions. `EXECUTION_MODE=hybrid` restores local Docker first, with
+EKS used only when the local host is full.
 
 Kubernetes Cluster Autoscaler handles a different decision: if a Pod cannot
 fit on the current worker node, it can increase the managed node group's
@@ -67,6 +66,10 @@ the sandbox Job template selects.
 - A gateway overflow submission returned HTTP 202, then completed with
   `execution_location: eks` and delivered its result to the local endpoint.
 - A normal submission completed through the local path.
+- On 2026-11-01, cloud-first Python and Bash submissions completed through the
+  real sender, NGINX, EKS, and local endpoint. A network-attempt submission was
+  blocked before delivery. Intermittent clean-run HTTP 503 failures remain an
+  open reliability issue; PowerShell also triggers Falco runtime alerts.
 
 These checks demonstrate the configured environment at test time. They do
 not make it production ready. The endpoint runs a successful payload on its
@@ -81,8 +84,10 @@ settings:
 ```dotenv
 EKS_ENABLED=true
 EKS_CONTEXT=cloudproject-sandbox-sydney
-EKS_IMAGE=562358727339.dkr.ecr.ap-southeast-2.amazonaws.com/cloudproject-sandbox@sha256:ea1f0713883b312c27f9465700f049e469d4627ac96304a4cb7fd4f9e711cf01
+EKS_IMAGE=562358727339.dkr.ecr.ap-southeast-2.amazonaws.com/cloudproject-sandbox@sha256:a2a31397c0f6a17856138c71ad14300b1e592ccc46e3ee0f61d7167911c5bffa
 EKS_MAX_INFLIGHT=3
+EXECUTION_MODE=cloud
+FALCO_ENABLED=true
 AWS_REGION=ap-southeast-2
 AWS_PROFILE=cloudproject-sydney
 KUBECONFIG=/Users/rance/.kube/config-cloudproject-sydney
@@ -102,14 +107,28 @@ submit from a second terminal:
 .venv/bin/python -m src.sender.send src/examples/good.py
 ```
 
-To force one test through EKS, restart the dashboard with a temporary low
-local memory budget:
+In cloud-first mode, the normal submission above already uses EKS. To show the
+older hybrid overflow path, restart with a temporary low local memory budget:
 
 ```sh
-LOCAL_MEMORY_BUDGET_MB=1 .venv/bin/python -m src.dashboard
+EXECUTION_MODE=hybrid LOCAL_MEMORY_BUDGET_MB=1 .venv/bin/python -m src.dashboard
 ```
 
-Restart it normally afterward to restore the configured local budget.
+Restart it normally afterward to restore the configured cloud-first mode.
+
+## Ownership handoff
+
+- **EKS owner:** cluster, node group and autoscaler, ECR image reference,
+  sandbox namespace and Job template, and the EKS runner's Job lifecycle.
+- **Falco owner:** detection rules, Falco deployment and alert interpretation.
+  Falco runs on the EKS nodes but its policy is a separate responsibility.
+- **Gateway owner:** signed language in the queue, worker scheduling, final
+  delivery decision, endpoint forwarding, and dashboard response.
+
+The shared interface is the EKS runner result: language selects the sandbox
+interpreter; a clean monitored run returns `OK`; a Falco finding returns
+`threat_detected`; unavailable monitoring or EKS returns
+`infrastructure_error`. Only `OK` may be forwarded.
 
 ## Teammate access
 

@@ -49,7 +49,7 @@ class Settings:
     pod_selector: str = "app.kubernetes.io/name=falco"
     container: str = "falco"
     settle_seconds: float = 3.0         # let late alerts flush after the Job ends
-    wait_seconds: float = 20.0          # how long to wait for the "observed" alert
+    wait_seconds: float = 120.0         # EKS/Falco metadata enrichment can delay the "observed" alert
     log_limit_bytes: int = 4_000_000    # more than this in the window is treated as a flood
 
 
@@ -215,16 +215,30 @@ class FalcoMonitor:
 
         created = getattr(pod.metadata, "creation_timestamp", None)
         age = (datetime.now(timezone.utc) - created).total_seconds() if created else 300
-        since_seconds = int(max(30, age + 30))
+        # Kubernetes and Falco can disagree briefly about timestamps. A narrow window has
+        # excluded a fresh runner alert on EKS even though it was present in Falco's log.
+        # Pod/container matching below keeps this wider window specific to this run.
+        since_seconds = int(max(120, age + 120))
 
         self._settle(terminated)
         deadline = self._clock() + self.settings.wait_seconds
+        observed_at = None
         while True:
             text = self._read_log(core, falco_pod, since_seconds, call)
             behaviour = parse_alerts(text, container_id, pod.metadata.name)
             if len(text.encode("utf-8", errors="ignore")) >= self.settings.log_limit_bytes:
                 behaviour.flooded = True      # a payload that floods the alert log is itself hostile
-            if behaviour.observed or behaviour.threat or self._clock() >= deadline:
+            if behaviour.threat:
+                return behaviour
+            now = self._clock()
+            if behaviour.observed:
+                if observed_at is None:
+                    observed_at = now
+                # A delayed start marker may reach the log before later syscall alerts.
+                # Give those alerts one more settle window before calling the run clean.
+                if now - observed_at >= self.settings.settle_seconds:
+                    return behaviour
+            elif now >= deadline:
                 return behaviour
             self._sleep(1)
 

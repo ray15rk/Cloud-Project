@@ -119,7 +119,7 @@ def test_collect_reads_the_falco_pod_on_the_same_node():
     assert behaviour.observed
     assert core.falco_list_calls == [("app.kubernetes.io/name=falco", "spec.nodeName=node-a")]
     assert core.falco_reads[0]["pod"] == "falco-a" and core.falco_reads[0]["container"] == "falco"
-    assert core.falco_reads[0]["since"] >= 30
+    assert core.falco_reads[0]["since"] >= 120
 
 
 def test_collect_waits_for_the_observed_alert_to_appear():
@@ -127,6 +127,16 @@ def test_collect_waits_for_the_observed_alert_to_appear():
     monitor, sleeps = fast_monitor()
     behaviour = monitor.collect(core, core.pod)
     assert behaviour.observed and len(core.falco_reads) == 3 and sleeps == [1, 1]
+
+
+def test_collect_waits_after_observation_for_later_threat_alerts():
+    core = FakeCore(falco_logs=[OBSERVED, OBSERVED, OBSERVED + "\n" + NET_SOCKET])
+    sleeps = []
+    monitor = FalcoMonitor(Settings(settle_seconds=2.0, wait_seconds=5.0),
+                           sleep=sleeps.append, clock=lambda: sum(sleeps))
+    behaviour = monitor.collect(core, core.pod)
+    assert behaviour.observed and behaviour.threat
+    assert len(core.falco_reads) == 3
 
 
 def test_collect_gives_up_waiting_and_reports_not_observed():
@@ -176,7 +186,8 @@ def test_collect_refuses_a_pod_it_cannot_match():
 def test_settle_waits_only_for_the_remaining_time():
     core = FakeCore()
     sleeps = []
-    monitor = FalcoMonitor(Settings(settle_seconds=3.0, wait_seconds=0.0), sleep=sleeps.append, clock=lambda: 0)
+    monitor = FalcoMonitor(Settings(settle_seconds=3.0, wait_seconds=0.0), sleep=sleeps.append,
+                           clock=lambda: sum(sleeps))
     monitor.collect(core, core.pod, terminated=core.pod.status.container_statuses[0].state.terminated)
     assert sleeps and 1.5 < sleeps[0] <= 2.1      # the Job finished about a second ago
 

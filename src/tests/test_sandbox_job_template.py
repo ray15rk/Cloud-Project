@@ -20,6 +20,10 @@ def test_job_template_sets_an_explicit_command_and_args():
     container = manifest["spec"]["template"]["spec"]["containers"][0]
     assert container["command"] == RUNNER
     assert container["args"][-1] == "/sandbox/script.py"
+    pod = manifest["spec"]["template"]["spec"]
+    scratch = next(v for v in pod["volumes"] if v["name"] == "scratch")
+    assert scratch["emptyDir"] == {"medium": "Memory", "sizeLimit": "16Mi"}
+    assert any(m["name"] == "scratch" and m["mountPath"] == "/tmp" for m in container["volumeMounts"])
 
 
 def test_dockerfile_entrypoint_runs_the_runner():
