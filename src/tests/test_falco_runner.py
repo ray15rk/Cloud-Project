@@ -113,3 +113,17 @@ def test_configured_runner_enables_the_monitor_only_when_asked(monkeypatch):
     assert eks.configured_runner().monitor is None
     monkeypatch.setenv("FALCO_ENABLED", "true")
     assert isinstance(eks.configured_runner().monitor, FalcoMonitor)
+
+
+def test_sandbox_output_that_is_one_json_line_is_not_mangled(monkeypatch):
+    core = FakeCore(sandbox_log='{"ok": true, "n": 1}\n')
+    result = make_runner(monkeypatch, core).run(b"print('{\"ok\": true, \"n\": 1}')", SUBMISSION)
+    assert result["stdout"] == '{"ok": true, "n": 1}\n'      # not "{'ok': True, 'n': 1}"
+
+
+def test_unobserved_failure_explains_itself(monkeypatch):
+    core = FakeCore(falco_logs=["Falco is up but logged nothing for this Pod"])
+    result = make_runner(monkeypatch, core, fast_monitor()[0]).run(b"print(1)", SUBMISSION)
+    assert result["status"] == "infrastructure_error"
+    assert "none of the log lines parsed as JSON" in result["detail"]
+    assert result["behaviour"]["diagnostics"]["log_lines"] == 1

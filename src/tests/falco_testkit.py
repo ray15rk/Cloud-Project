@@ -53,7 +53,8 @@ class FakeCore:
     """Sandbox namespace and Falco namespace in one fake. falco_logs is a list: one entry per read."""
 
     def __init__(self, exit_code=0, reason="Completed", falco_logs=(OBSERVED,), falco_pods=None, log_error=None,
-                 list_error=None):
+                 list_error=None, sandbox_log="script output\n"):
+        self.sandbox_log = sandbox_log
         self.pod = make_pod(exit_code=exit_code, reason=reason)
         self.falco_pods = [make_falco_pod()] if falco_pods is None else falco_pods
         self.falco_logs, self.log_error, self.list_error = list(falco_logs), log_error, list_error
@@ -81,13 +82,31 @@ class FakeCore:
             return types.SimpleNamespace(items=[p for p in self.falco_pods if node in (None, p.spec.node_name)])
         return types.SimpleNamespace(items=[self.pod])
 
-    def read_namespaced_pod_log(self, name, namespace, container=None, since_seconds=None, limit_bytes=None):
+    def read_namespaced_pod_log(self, name, namespace, container=None, since_seconds=None, limit_bytes=None,
+                                _preload_content=True):
         if namespace == "falco":
-            self.falco_reads.append({"pod": name, "container": container, "since": since_seconds, "limit": limit_bytes})
+            self.falco_reads.append({"pod": name, "container": container, "since": since_seconds,
+                                     "limit": limit_bytes, "raw": _preload_content is False})
             if self.log_error:
                 raise self.log_error
-            return self.falco_logs.pop(0) if len(self.falco_logs) > 1 else self.falco_logs[0]
-        return "script output\n"
+            text = self.falco_logs.pop(0) if len(self.falco_logs) > 1 else self.falco_logs[0]
+        else:
+            text = self.sandbox_log
+        return client_log_response(text, _preload_content)
+
+
+def client_log_response(text, preload):
+    """What the real Kubernetes client returns for a pod log.
+
+    With preload (the default) it json-decodes a body that is exactly one JSON document and returns the
+    Python repr of the result. That is the defect read_pod_log_text avoids by reading the raw response.
+    """
+    if preload is False:
+        return types.SimpleNamespace(data=text.encode("utf-8"))
+    try:
+        return str(json.loads(text))
+    except ValueError:
+        return text
 
 
 def fast_monitor(**overrides):

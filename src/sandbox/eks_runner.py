@@ -13,6 +13,7 @@ from kubernetes import client, config
 from kubernetes.client.exceptions import ApiException
 
 from src.sandbox.falco_monitor import FalcoMonitor, MonitorError, monitoring_enabled, settings_from_env
+from src.sandbox.kube_logs import read_pod_log_text
 
 
 NAMESPACE = "cloudproject-sandbox"
@@ -114,7 +115,7 @@ class EKSRunner:
             return {"status": "infrastructure_error", "detail": "EKS Pod has no termination status"}
 
         try:
-            output = self._call(core.read_namespaced_pod_log, pod.metadata.name, NAMESPACE)
+            output = read_pod_log_text(core, self._call, pod.metadata.name, NAMESPACE)
         except ApiException:
             output = ""
         output = output[:65536]
@@ -155,7 +156,8 @@ class EKSRunner:
             result.update(status="threat_detected", detail=behaviour.summary())
         elif not behaviour.observed and result["status"] == "OK":
             result.update(status="infrastructure_error",
-                          detail="Falco did not report the sandbox starting, so the run cannot be called clean")
+                          detail="Falco did not report the sandbox starting, so the run cannot be called clean ("
+                                 + behaviour.explain_unobserved() + ")")
 
     def run(self, payload: bytes, submission_id: str) -> dict:
         if len(payload) > 65536:
