@@ -31,10 +31,18 @@ class EKSRunner:
         self.monitor = monitor   # None = outcome-only checks (no behavioural detection)
 
     def _clients(self):
-        configuration = client.Configuration()
-        config.load_kube_config(context=self.context, client_configuration=configuration)
-        api = client.ApiClient(configuration=configuration)
-        return client.CoreV1Api(api), client.BatchV1Api(api)
+        # The Kubernetes loader logs a failed kubeconfig exec credential command but can
+        # still return an unauthenticated client. Treat that as setup failure before any
+        # ConfigMap/Job mutation, and retry a brief AWS credential service hiccup.
+        for attempt in range(3):
+            configuration = client.Configuration()
+            config.load_kube_config(context=self.context, client_configuration=configuration)
+            if any(configuration.api_key.values()):
+                api = client.ApiClient(configuration=configuration)
+                return client.CoreV1Api(api), client.BatchV1Api(api)
+            if attempt < 2:
+                time.sleep(0.5 * (attempt + 1))
+        raise RuntimeError("EKS kubeconfig did not provide an AWS authentication token; refresh the AWS login")
 
     @staticmethod
     def _call(operation, *args, **kwargs):

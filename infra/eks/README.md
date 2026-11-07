@@ -55,6 +55,12 @@ helm list -n kube-system
 Set `KUBECONFIG=/Users/rance/.kube/config-cloudproject-sydney` in the local
 environment or `.env` before using the Sydney Kubernetes context.
 
+If a run fails before creating a Job, first check `aws sts get-caller-identity
+--profile cloudproject-sydney`. An expired AWS login can make the kubeconfig's
+credential command fail. The EKS runner retries a missing token three times and
+then logs `Kubernetes client setup` with a clear authentication error; refresh
+the session with `aws login --profile cloudproject-sydney` before retrying.
+
 ## Sandbox image
 
 The sandbox image is stored in the Sydney ECR repository. Use the image's
@@ -126,10 +132,16 @@ adds a worker node only when Kubernetes cannot schedule a Pod on existing nodes.
 - On 2026-11-01, clean Python and Bash submissions completed through the real
   sender, NGINX, gateway, EKS Job, and local endpoint. A network-attempt script
   was rejected by Falco before endpoint delivery.
-- Intermittent clean-run HTTP 503 failures were also observed: some Falco start
-  markers arrived too late for the earlier gateway poll window, and a separate
-  short EKS runner failure has not yet been diagnosed. Treat this path as a
-  working integration with an open reliability issue, not as fully validated.
+- Intermittent clean-run HTTP 503 failures were observed. On 2026-11-02, a clean Python
+  Job failed closed after the full 120-second Falco wait, although its `CP Sandbox
+  Observed` alert was visible in the Falco log afterward. The deployed Falco
+  ConfigMap already has `buffered_outputs: false`. Darius's raw Kubernetes log
+  reader fix was merged on 2026-11-07; three consecutive clean Python EKS canaries
+  then passed with the start alert observed in about four seconds, and a network
+  attempt was still detected as a threat. This limited run did not reproduce the
+  earlier failure. A separate short EKS runner failure produced no Job; missing
+  AWS tokens are now detected and retried, but the cause of those earlier
+  failures was not captured.
 
 ## Costs and shutdown
 
