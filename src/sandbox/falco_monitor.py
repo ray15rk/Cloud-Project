@@ -26,6 +26,8 @@ from datetime import datetime, timezone
 
 from kubernetes.client.exceptions import ApiException
 
+from src.sandbox.kube_logs import read_pod_log_text
+
 LOGGER = logging.getLogger(__name__)
 
 # Contract with infra/falco/cloudproject_rules.yaml
@@ -76,6 +78,15 @@ class Behaviour:
     observed: bool = False
     findings: list = field(default_factory=list)
     flooded: bool = False
+    # What the monitor saw, so a failure can say why (set by parse_alerts and collect)
+    lines: int = 0
+    json_lines: int = 0
+    sandbox_alerts: int = 0
+    matched_alerts: int = 0
+    other_alerts: list = field(default_factory=list)
+    polls: int = 0
+    window_seconds: int = 0
+    falco_pods: list = field(default_factory=list)
 
     @property
     def threat(self) -> bool:
@@ -94,10 +105,31 @@ class Behaviour:
             text += " (alert flood from this node)"
         return text
 
+    def explain_unobserved(self) -> str:
+        """Why no start alert was found, naming the most likely cause first."""
+        if self.lines == 0:
+            hint = "the Falco log window was empty (wrong Falco pod or container, or nothing written yet)"
+        elif self.json_lines == 0:
+            hint = "none of the log lines parsed as JSON (is falco.json_output enabled?)"
+        elif self.sandbox_alerts == 0:
+            hint = ("Falco logged JSON alerts but none from the CloudProject rules (rules not loaded, "
+                    "or the container/k8s fields are missing so the rules never match)")
+        elif self.matched_alerts == 0:
+            hint = "sandbox alerts exist, but for other Pods only: " + "; ".join(self.other_alerts)
+        else:
+            hint = "alerts matched this Pod but none was the start alert (is the 'observed' rule loaded?)"
+        pods = ", ".join(self.falco_pods) or "no Falco pod"
+        return (f"{hint}. Read {self.lines} line(s) from {pods} over a {self.window_seconds}s window "
+                f"in {self.polls} poll(s)")
+
     def as_dict(self) -> dict:
         return {"engine": "falco", "observed": self.observed,
                 "verdict": "threat" if self.threat else "clean",
-                "findings": self.findings, "flooded": self.flooded}
+                "findings": self.findings, "flooded": self.flooded,
+                "diagnostics": {"log_lines": self.lines, "json_lines": self.json_lines,
+                                "sandbox_alerts": self.sandbox_alerts, "matched_alerts": self.matched_alerts,
+                                "other_pods": self.other_alerts, "polls": self.polls,
+                                "window_seconds": self.window_seconds, "falco_pods": self.falco_pods}}
 
 
 def short_container_id(container_id: str) -> str:
@@ -133,6 +165,9 @@ def parse_alerts(text: str, container_id: str, pod_name: str) -> Behaviour:
     seen = set()
     for line in text.splitlines():
         line = line.strip()
+        if not line:
+            continue
+        behaviour.lines += 1
         if not line.startswith("{"):
             continue
         try:
@@ -141,12 +176,18 @@ def parse_alerts(text: str, container_id: str, pod_name: str) -> Behaviour:
             continue
         if not isinstance(alert, dict):
             continue
+        behaviour.json_lines += 1
         tags = alert.get("tags") or []
         fields = alert.get("output_fields") or {}
         if SANDBOX_TAG not in tags or not isinstance(fields, dict):
             continue
+        behaviour.sandbox_alerts += 1
         if not _matches(fields, short_id, pod_name):
+            other = f"{fields.get('k8s.pod.name') or '?'} (container {str(fields.get('container.id') or '?')[:12]})"
+            if other not in behaviour.other_alerts and len(behaviour.other_alerts) < 3:
+                behaviour.other_alerts.append(other)
             continue
+        behaviour.matched_alerts += 1
         if OBSERVED_TAG in tags:
             behaviour.observed = True
             continue
@@ -188,9 +229,9 @@ class FalcoMonitor:
 
     def _read_log(self, core, falco_pod, since_seconds, call) -> str:
         try:
-            return call(core.read_namespaced_pod_log, falco_pod.metadata.name, self.settings.namespace,
-                        container=self.settings.container, since_seconds=since_seconds,
-                        limit_bytes=self.settings.log_limit_bytes)
+            return read_pod_log_text(core, call, falco_pod.metadata.name, self.settings.namespace,
+                                     container=self.settings.container, since_seconds=since_seconds,
+                                     limit_bytes=self.settings.log_limit_bytes)
         except ApiException as exc:
             raise MonitorError(f"could not read Falco logs ({exc.status})") from exc
 
@@ -223,9 +264,13 @@ class FalcoMonitor:
         self._settle(terminated)
         deadline = self._clock() + self.settings.wait_seconds
         observed_at = None
+        polls = 0
         while True:
             text = self._read_log(core, falco_pod, since_seconds, call)
+            polls += 1
             behaviour = parse_alerts(text, container_id, pod.metadata.name)
+            behaviour.polls, behaviour.window_seconds = polls, since_seconds
+            behaviour.falco_pods = [falco_pod.metadata.name]
             if len(text.encode("utf-8", errors="ignore")) >= self.settings.log_limit_bytes:
                 behaviour.flooded = True      # a payload that floods the alert log is itself hostile
             if behaviour.threat:

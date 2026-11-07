@@ -197,3 +197,64 @@ def test_healthy_reflects_running_falco_pods():
     assert monitor.healthy(FakeCore())
     assert not monitor.healthy(FakeCore(falco_pods=[]))
     assert not monitor.healthy(FakeCore(list_error=ApiException(status=500, reason="boom")))
+
+
+def test_a_log_with_a_single_alert_is_read_raw_and_not_lost():
+    """A clean run leaves exactly one alert (the start marker). The client mangles a one-JSON-line log
+    unless it is read raw, so this is the case that once failed closed on a clean run."""
+    core = FakeCore(falco_logs=[OBSERVED])
+    monitor, _ = fast_monitor()
+    behaviour = monitor.collect(core, core.pod)
+    assert behaviour.observed and not behaviour.threat
+    assert all(read["raw"] for read in core.falco_reads)
+
+
+# ------------------------------------------------------------------ diagnostics: why was the alert missed?
+
+def explain(log, **settings):
+    core = FakeCore(falco_logs=[log])
+    monitor, _ = fast_monitor(**settings)
+    behaviour = monitor.collect(core, core.pod)
+    assert not behaviour.observed
+    return behaviour.explain_unobserved()
+
+
+def test_counts_describe_what_the_monitor_saw():
+    other = alert("CP Sandbox Network Socket", ["cloudproject_sandbox", "threat", "behaviour_network"],
+                  container=OTHER_SHORT, pod="run-other-abcde")
+    behaviour = parse_alerts("\n".join(["Falco started", "{broken", other, NET_SOCKET, ""]), CONTAINER, POD)
+    assert (behaviour.lines, behaviour.json_lines, behaviour.sandbox_alerts, behaviour.matched_alerts) == (4, 2, 2, 1)
+    assert behaviour.other_alerts == ["run-other-abcde (container ffffffffffff)"]
+
+
+def test_diagnosis_empty_log():
+    assert "window was empty" in explain("")
+
+
+def test_diagnosis_log_that_is_not_json():
+    text = explain("12:00:01.000000000: Warning Network socket opened (container=a1b2c3d4e5f6)\n")
+    assert "none of the log lines parsed as JSON" in text and "falco.json_output" in text
+
+
+def test_diagnosis_json_without_our_rules():
+    stock = json.dumps({"rule": "Terminal shell in container", "tags": ["container", "shell"],
+                        "output_fields": {"container.id": SHORT}})
+    assert "none from the CloudProject rules" in explain(stock + "\n")
+
+
+def test_diagnosis_alerts_for_another_pod_only():
+    other = alert("CP Sandbox Observed", ["cloudproject_sandbox", "observed"], container=OTHER_SHORT, pod="run-other-abcde")
+    text = explain(other + "\n")
+    assert "other Pods only" in text and "run-other-abcde" in text
+
+
+def test_diagnosis_names_the_falco_pod_window_and_polls():
+    text = explain("")
+    assert "falco-abcde" in text and "window" in text and "poll(s)" in text
+
+
+def test_diagnostics_travel_in_the_behaviour_dict():
+    core = FakeCore(falco_logs=[OBSERVED + "\n" + NET_SOCKET])
+    monitor, _ = fast_monitor()
+    diagnostics = monitor.collect(core, core.pod).as_dict()["diagnostics"]
+    assert diagnostics["log_lines"] == 2 and diagnostics["matched_alerts"] == 2 and diagnostics["falco_pods"] == ["falco-abcde"]
