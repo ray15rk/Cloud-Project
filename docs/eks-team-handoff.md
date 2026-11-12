@@ -2,10 +2,10 @@
 
 ## What runs where
 
-This is a cloud-first dry-run demonstration. The gateway, dashboard, Nginx
+This is an EKS dry-run demonstration. The gateway, dashboard, Nginx
 proxy, endpoint, and notification server run on the operator's computer. The
 EKS cluster `cloudproject-sandbox-sydney` runs dry-run Jobs in AWS region
-`ap-southeast-2`. Hybrid local Docker overflow remains available as an optional mode.
+`ap-southeast-2`. Every verified dry run is queued as an EKS Job.
 
 ```text
 Browser / sender CLI
@@ -25,12 +25,11 @@ Local gateway on 127.0.0.1:8000 -- verifies the signed payload
 Local endpoint on 127.0.0.1:5000 -- receives a successful payload
 ```
 
-With `EXECUTION_MODE=cloud`, every verified submission is queued for an EKS
-dry-run Job and initially receives HTTP 202. After a clean result, the gateway
+Every verified submission is queued for an EKS dry-run Job and initially
+receives HTTP 202. After a clean result, the gateway
 forwards the original payload to the local endpoint. A detected threat or an
 unavailable monitor blocks delivery. The default limit is three outstanding
-cloud submissions. `EXECUTION_MODE=hybrid` restores local Docker first, with
-EKS used only when the local host is full.
+cloud submissions. When EKS is disabled, dry-run submissions fail closed.
 
 Kubernetes Cluster Autoscaler handles a different decision: if a Pod cannot
 fit on the current worker node, it can increase the managed node group's
@@ -63,58 +62,29 @@ the sandbox Job template selects.
 - A pending workload triggered a second worker node; both nodes became Ready.
 - After the workload was removed, Cluster Autoscaler returned the group to
   one worker node.
-- A gateway overflow submission returned HTTP 202, then completed with
+- An EKS submission returned HTTP 202, then completed with
   `execution_location: eks` and delivered its result to the local endpoint.
-- A normal submission completed through the local path.
+- A normal submission completed through the local path during the earlier
+  hybrid implementation; that route has since been removed.
 - On 2026-11-01, cloud-first Python and Bash submissions completed through the
   real sender, NGINX, EKS, and local endpoint. A network-attempt submission was
   blocked before delivery. Intermittent clean-run HTTP 503 failures remain an
   open reliability issue; PowerShell also triggers Falco runtime alerts.
+- On 2026-11-12, a direct-gateway clean Python submission completed through
+  EKS and Falco and was delivered to the endpoint. A network-attempt canary
+  returned HTTP 422 with a Falco threat verdict and was not delivered. No
+  test Jobs or ConfigMaps remained afterward.
 
 These checks demonstrate the configured environment at test time. They do
 not make it production ready. The endpoint runs a successful payload on its
 own host after the dry run; only the dry run uses the sandbox.
 
-## Run it on the operator's Mac
+## Run it from your computer
 
-Keep AWS credentials outside the repository. The gitignored `.env` needs the
-generated `SHARED_SECRET`, the project's local service URLs, and these EKS
-settings:
-
-```dotenv
-EKS_ENABLED=true
-EKS_CONTEXT=cloudproject-sandbox-sydney
-EKS_IMAGE=562358727339.dkr.ecr.ap-southeast-2.amazonaws.com/cloudproject-sandbox@sha256:a2a31397c0f6a17856138c71ad14300b1e592ccc46e3ee0f61d7167911c5bffa
-EKS_MAX_INFLIGHT=3
-EXECUTION_MODE=cloud
-FALCO_ENABLED=true
-AWS_REGION=ap-southeast-2
-AWS_PROFILE=cloudproject-sydney
-KUBECONFIG=/Users/rance/.kube/config-cloudproject-sydney
-GATEWAY_URL=http://127.0.0.1:8080/submit
-```
-
-From the repository root, start Docker Desktop and the dashboard:
-
-```sh
-.venv/bin/python -m src.dashboard
-```
-
-Open `http://127.0.0.1:8000`. If Nginx is already running on port 8080,
-submit from a second terminal:
-
-```sh
-.venv/bin/python -m src.sender.send src/examples/good.py
-```
-
-In cloud-first mode, the normal submission above already uses EKS. To show the
-older hybrid overflow path, restart with a temporary low local memory budget:
-
-```sh
-EXECUTION_MODE=hybrid LOCAL_MEMORY_BUDGET_MB=1 .venv/bin/python -m src.dashboard
-```
-
-Restart it normally afterward to restore the configured cloud-first mode.
+Follow the [macOS/Linux](eks-teammate-setup.md) or
+[Windows](eks-teammate-setup-windows.md) guide. Each covers your own AWS
+profile and kubeconfig, `.env`, local services, and a cloud smoke test. The
+ECR image digest is recorded in [deployment details](../infra/eks/README.md).
 
 ## Ownership handoff
 
@@ -132,8 +102,8 @@ interpreter; a clean monitored run returns `OK`; a Falco finding returns
 
 ## Teammate access
 
-A teammate can run the project in local-only mode with Docker, their own
-generated secret, and `EKS_ENABLED=false`. This needs no AWS access.
+A teammate needs authorized EKS access to run gateway dry runs. With
+`EKS_ENABLED=false`, the gateway rejects dry-run submissions.
 
 To use the Sydney EKS cluster from another computer, the teammate needs an
 authorized IAM identity in the same AWS account, Kubernetes access to the

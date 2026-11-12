@@ -1,4 +1,4 @@
-"""Recover and process durable EKS overflow submissions."""
+"""Recover and process durable EKS dry-run submissions."""
 
 import logging
 import threading

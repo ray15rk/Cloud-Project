@@ -588,13 +588,13 @@ async function refreshOverview() {
 
     $("#activity-count").textContent = data.stats.total;
 
-    const percent = data.resources.total_mb ? Math.min(100, Math.round(data.resources.committed_mb / data.resources.total_mb * 100)) : 0;
+    const percent = data.cloud.limit ? Math.min(100, Math.round(data.cloud.active / data.cloud.limit * 100)) : 0;
 
     $("#memory-percent").textContent = `${percent}%`;
 
     $("#memory-fill").style.width = `${percent}%`;
 
-    $("#memory-caption").textContent = `${data.resources.committed_mb} / ${data.resources.total_mb} MB · ${data.resources.slots} local slots`;
+    $("#memory-caption").textContent = `${data.cloud.active} / ${data.cloud.limit} active EKS submissions`;
 
     $("#connection-banner").hidden = data.configured;
 
@@ -630,11 +630,11 @@ async function refreshHealth(force = false) {
 
     cloudCard.querySelector(".badge").className = `badge ${cloudStatus === "online" ? "success" : "amber"}`;
 
-    cloudCard.querySelector("p").textContent = cloudStatus === "online" ? "Cloud overflow is ready. Verified submissions use EKS when local sandbox slots are full." : cloudStatus === "disabled" ? "Cloud overflow is disabled in gateway configuration." : "Cloud overflow is currently unavailable. Check EKS credentials, context, and image settings.";
+    cloudCard.querySelector("p").textContent = cloudStatus === "online" ? "EKS dry runs are ready. Every verified submission runs as an EKS Job." : cloudStatus === "disabled" ? "EKS dry runs are disabled in gateway configuration." : "EKS dry runs are currently unavailable. Check credentials, context, and image settings.";
 
-    cloudCard.querySelector(".cloud-note").textContent = cloudStatus === "online" ? "Overflow submissions receive HTTP 202 and run as EKS Jobs." : "Submissions that cannot use local capacity are rejected with HTTP 503.";
+    cloudCard.querySelector(".cloud-note").textContent = cloudStatus === "online" ? "Submissions receive HTTP 202 while their EKS Jobs run." : "Dry-run submissions fail closed when EKS is disabled or unavailable.";
 
-    const labels = { gateway: ["API gateway", "Verification, routing & delivery"], docker: ["Docker engine", "Linux container runtime"], image: ["Sandbox image", services.image?.name || "Runtime image"], endpoint: ["Endpoint device", "Original payload execution"], central: ["Central server", "Failure notification inbox"], eks: ["AWS EKS", "Cloud overflow execution"], falco: ["Behaviour monitor", "Falco syscall detection on EKS"] };
+    const labels = { gateway: ["API gateway", "Verification, routing & delivery"], endpoint: ["Endpoint device", "Original payload execution"], central: ["Central server", "Failure notification inbox"], eks: ["AWS EKS", "Dry-run execution"], falco: ["Behaviour monitor", "Falco syscall detection on EKS"] };
 
     $("#service-list").replaceChildren(...Object.entries(labels).map(([key, [name, description]]) => {
 
@@ -720,7 +720,7 @@ async function refreshMetrics() {
 
     $("#capacity-chart").replaceChildren(
 
-      metricRow("Local", local.count, total, `${local.count} completed (${data.local_slots} slots max)`),
+      metricRow("Historical local", local.count, total, `${local.count} completed before EKS-only mode`),
 
       metricRow("EKS", eks.count, total, `${eks.count} completed (${data.cloud_limit} max concurrent)`),
 
@@ -728,7 +728,7 @@ async function refreshMetrics() {
 
     );
 
-    $("#capacity-caption").textContent = `${total} final submissions in the last hour; bars show the volume split across execution targets.`;
+    $("#capacity-caption").textContent = `${total} final submissions in the last hour; historical local runs may appear.`;
 
     const stages = [["verify_ms", "Verification"], ["dry_run_ms", "Dry run"], ["forward_ms", "Forwarding"]];
 
@@ -754,7 +754,7 @@ async function refreshMetrics() {
 
     );
 
-    $("#failure-summary").textContent = `Failure isolation: ${eks.dry_run_failures} EKS dry-run failures, ${local.dry_run_failures} local dry-run failures; ${local.delivered + eks.delivered} successful deliveries.`;
+    $("#failure-summary").textContent = `Failure isolation: ${eks.dry_run_failures} EKS dry-run failures; ${eks.delivered} EKS deliveries. Historical local results may still appear above.`;
 
   } catch (error) {
 

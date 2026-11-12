@@ -1,4 +1,4 @@
-"""Durable, bounded queue for EKS overflow submissions."""
+"""Durable, bounded queue for EKS dry-run submissions."""
 
 import json
 import os
@@ -39,6 +39,11 @@ class CloudSubmissionStore:
             db.execute("ALTER TABLE cloud_submissions ADD COLUMN language TEXT NOT NULL DEFAULT 'python'")
             db.commit()
         return db
+
+    def active_count(self):
+        with closing(self._connect()) as db:
+            return db.execute("""SELECT COUNT(*) FROM cloud_submissions
+                WHERE state IN ('queued', 'running', 'forwarding')""").fetchone()[0]
 
     def enqueue(self, submission_id, nonce, payload, name, scenario, verify_ms, language="python"):
         now = time.time()

@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-11-12
+- Removed gateway hybrid routing. Every verified dry run now queues an EKS Job;
+  disabling EKS fails closed instead of running a local Docker dry run.
+- Fixed the EKS runner to pass the current `KUBECONFIG` path explicitly to the
+  Kubernetes Python client. The client had captured the default path before
+  `.env` loaded, causing a context error before Job creation.
+- Verified a clean Python submission through the local gateway, EKS, Falco,
+  and endpoint: HTTP 202 followed by HTTP 200 with `execution_location: eks`.
+  A network-attempt canary returned HTTP 422 with a Falco threat verdict and
+  was not delivered. The temporary EKS API allowlist entry was removed after
+  testing.
+
 ## 2026-10-31
 - Added behavioural threat detection with Falco (`docs/falco-setup.md`). The EKS dry run was judged only by
   outcome (timeout, OOM kill, exit code), so a script that attempted something forbidden, swallowed the

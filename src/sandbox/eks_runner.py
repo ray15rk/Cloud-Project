@@ -36,7 +36,10 @@ class EKSRunner:
         # ConfigMap/Job mutation, and retry a brief AWS credential service hiccup.
         for attempt in range(3):
             configuration = client.Configuration()
-            config.load_kube_config(context=self.context, client_configuration=configuration)
+            # The client library snapshots KUBECONFIG at import time. dotenv is
+            # loaded later by the gateway, so pass the current value explicitly.
+            config.load_kube_config(config_file=os.environ.get("KUBECONFIG"),
+                                    context=self.context, client_configuration=configuration)
             if any(configuration.api_key.values()):
                 api = client.ApiClient(configuration=configuration)
                 return client.CoreV1Api(api), client.BatchV1Api(api)

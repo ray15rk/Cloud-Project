@@ -1,8 +1,8 @@
 # EKS implementation status and remaining work
 
 The project uses a local gateway for signed submissions and a Sydney EKS
-cluster for overflow dry runs. The gateway chooses local Docker or an EKS Job;
-Kubernetes Cluster Autoscaler independently changes worker node capacity.
+cluster for all dry runs. The gateway queues EKS Jobs; Kubernetes Cluster
+Autoscaler independently changes worker node capacity.
 See [deployment details](../infra/eks/README.md) for current resource names and
 the [team handoff](eks-team-handoff.md) for the request path.
 

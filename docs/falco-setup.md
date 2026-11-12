@@ -59,7 +59,7 @@ the 10-second deadline in `docker/sandbox/runner.py` already handle those.
 | `src/sandbox/falco_monitor.py` | **New.** Reads Falco's alerts and produces the verdict |
 | `src/sandbox/eks_runner.py` | Applies the verdict; new status `threat_detected`; `monitor_healthy()` |
 | `src/gateway/cloud_worker.py` | Includes `behaviour` findings in API responses and the activity log |
-| `src/gateway/gateway_app.py` | `EXECUTION_MODE`, `EKS_WORKERS`, startup warnings |
+| `src/gateway/gateway_app.py` | EKS queueing, `EKS_WORKERS`, startup warnings |
 | `src/gateway/dashboard.py`, `static/dashboard.js` | "Behaviour monitor" health row |
 | `infra/k8s/sandbox-job.yaml.template`, `docker/sandbox/Dockerfile` | Explicit Job `command`/`args` and restored `ENTRYPOINT` (see below) |
 | `scripts/check_falco.py` | **New.** Live canary test against your cluster |
@@ -96,10 +96,10 @@ kubectl --context cloudproject-sandbox-sydney debug node/<node-name> -it --image
 The second command should print the path. If the file is missing, this probe will not work on that
 node (use `driver.kind: kmod` in `values.yaml` instead, which needs kernel headers).
 
-**2. Rebuild and push the sandbox image** (recommended, because the Dockerfile changed). Use the build
-and push commands in `docs/eks-teammate-setup.md` (macOS/Linux) or `docs/eks-teammate-setup-windows.md`
-(Windows), then put the new digest in `EKS_IMAGE` in `.env`. The Job now works with the old image too,
-because it passes its own command.
+**2. Confirm the sandbox image.** Use the verified ECR digest in
+[`infra/eks/README.md`](../infra/eks/README.md) for `EKS_IMAGE`. The EKS Job
+passes its own command. If the sandbox image is rebuilt and pushed by the
+cluster operator, update `EKS_IMAGE` to the new immutable digest.
 
 **3. Create the namespace and network policy**
 
@@ -142,11 +142,10 @@ works with a least-privilege identity.
 ```dotenv
 EKS_ENABLED=true
 FALCO_ENABLED=true
-EXECUTION_MODE=cloud
 ```
 
-`EXECUTION_MODE=cloud` makes every dry run an EKS Job so every run is watched. Without it (the default,
-`hybrid`) local Docker runs are **not** monitored, and the gateway prints a warning saying so.
+Every verified dry run is an EKS Job. With Falco enabled, an unavailable
+monitor blocks delivery.
 
 **8. Run the live canary test**
 
@@ -221,7 +220,7 @@ settings detection depends on.
 
 ## Limits to state honestly
 
-- **EKS only.** Local Docker runs are not monitored. Use `EXECUTION_MODE=cloud` for full coverage.
+- **EKS only.** Gateway dry runs use EKS Jobs; Falco monitors those jobs when enabled.
 - **After the fact.** Alerts are read once the Job ends (plus the settle time). A run is never killed
   mid-flight by Falco; it is rejected before forwarding. An alert arriving later than the settle plus
   wait window would be missed.

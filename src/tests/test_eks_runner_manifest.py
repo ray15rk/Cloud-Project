@@ -35,8 +35,9 @@ def test_eks_client_failure_logs_its_stage(monkeypatch, caplog):
 def test_kubeconfig_exec_without_token_is_retried(monkeypatch):
     runner = EKSRunner("repo/sandbox@sha256:" + "a" * 64)
     attempts = []
-    def load_config(*, context, client_configuration):
-        attempts.append(context)
+    monkeypatch.setenv("KUBECONFIG", "/tmp/test-sydney-kubeconfig")
+    def load_config(*, config_file, context, client_configuration):
+        attempts.append((config_file, context))
         if len(attempts) == 2:
             client_configuration.api_key["authorization"] = "Bearer test-token"
     monkeypatch.setattr(eks_module.config, "load_kube_config", load_config)
@@ -44,13 +45,14 @@ def test_kubeconfig_exec_without_token_is_retried(monkeypatch):
 
     core, batch = runner._clients()
     assert len(attempts) == 2
+    assert attempts[0] == ("/tmp/test-sydney-kubeconfig", "cloudproject-sandbox-sydney")
     assert core.api_client is batch.api_client
 
 
 def test_kubeconfig_exec_without_token_fails_before_creating_a_job(monkeypatch):
     runner = EKSRunner("repo/sandbox@sha256:" + "a" * 64)
     attempts = []
-    def load_config(*, context, client_configuration):
+    def load_config(*, config_file, context, client_configuration):
         attempts.append(context)
     monkeypatch.setattr(eks_module.config, "load_kube_config", load_config)
     monkeypatch.setattr(eks_module.time, "sleep", lambda _: None)

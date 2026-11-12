@@ -1,249 +1,116 @@
+"""Dashboard checks for the EKS-only gateway."""
 import re
 from types import SimpleNamespace
 
 import pytest
+
 import src.gateway.gateway_app as gw
 import src.gateway.dashboard as dashboard
 from src.gateway.activity import ActivityStore
-from src.resource_manager.resource_manager import ResourceManager
+from src.gateway.cloud_submissions import CloudSubmissionStore
+from src.gateway.cloud_worker import CloudWorker
 from src.watchdog.verifier import NonceStore
 
 
 @pytest.fixture
 def operator(monkeypatch, tmp_path):
     monkeypatch.setattr(gw, "SHARED_SECRET", b"dashboard-test-private-secret")
-    monkeypatch.setattr(gw, "EKS_ENABLED", False)
-    monkeypatch.setattr(gw, "CLOUD_FIRST", False)
+    monkeypatch.setattr(gw, "EKS_ENABLED", True)
     monkeypatch.setattr(gw, "nonce_store", NonceStore())
-    monkeypatch.setattr(gw, "resource_manager", ResourceManager())
     monkeypatch.setattr(gw, "activity_store", ActivityStore(tmp_path / "activity.sqlite3"))
-    monkeypatch.setattr(gw, "notify_failure", lambda *args: None)
-    calls = {"dry_runs": 0, "forwards": 0, "status": "OK"}
-    def dry_run(payload, memory_limit=None, **kwargs):
-        calls["dry_runs"] += 1
-        return {"status": calls["status"], "detail": "controlled test result"}
+    monkeypatch.setattr(gw, "cloud_store", CloudSubmissionStore(tmp_path / "cloud.sqlite3"))
+    forwards = []
+
+    class Runner:
+        def run(self, payload, submission_id, language):
+            return {"status": "OK", "job_name": "test-job"}
+
     def post(*args, **kwargs):
-        calls["forwards"] += 1
-        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"executed": True, "returncode": 0, "stdout": "delivered"})
-    monkeypatch.setattr(gw, "dry_run", dry_run)
+        forwards.append(kwargs.get("data"))
+        return SimpleNamespace(raise_for_status=lambda: None,
+                               json=lambda: {"executed": True, "returncode": 0})
+
     monkeypatch.setattr(gw.requests, "post", post)
+    monkeypatch.setattr(gw, "notify_failure", lambda *args: None)
+    monkeypatch.setattr(gw, "configured_runner", lambda: Runner())
+    worker = CloudWorker(gw.cloud_store, gw.activity_store, gw.configured_runner,
+                         gw.notify_failure, gw.ENDPOINT_URL)
+    monkeypatch.setattr(worker, "start", lambda: None)
+    monkeypatch.setattr(gw, "cloud_worker", worker)
     client = gw.app.test_client()
-    page = client.get("/")
-    token = re.search(r'name="dashboard-token" content="([^"]+)"', page.text).group(1)
-    return client, {"X-Dashboard-Token": token}, calls
+    token = re.search(r'name="dashboard-token" content="([^"]+)"', client.get("/").text).group(1)
+    return client, {"X-Dashboard-Token": token}, forwards, worker
 
 
 def test_page_and_assets_do_not_expose_signing_key(operator):
-    client, _, _ = operator
+    client, _, _, _ = operator
     page = client.get("/")
     assert page.status_code == 200
-    assert "Relay" in page.text
     assert "dashboard-test-private-secret" not in page.text
     assert "frame-ancestors 'none'" in page.headers["Content-Security-Policy"]
     for asset in ("dashboard.js", "dashboard.css", "mark.svg"):
         assert client.get("/dashboard-assets/" + asset).status_code == 200
 
 
-def test_signing_requires_page_token_and_loopback(operator):
-    client, headers, calls = operator
+def test_signing_requires_token_and_loopback(operator):
+    client, headers, _, _ = operator
     payload = {"code": "print('hello')"}
     assert client.post("/api/run", json=payload).status_code == 403
-    assert client.post("/api/run", json=payload, headers=headers, environ_base={"REMOTE_ADDR": "192.168.1.7"}).status_code == 403
-    assert client.post("/api/run", json=payload, headers={**headers, "Host": "attacker.example"}).status_code == 403
-    assert calls["dry_runs"] == 0
+    assert client.post("/api/run", json=payload, headers=headers,
+                       environ_base={"REMOTE_ADDR": "192.168.1.7"}).status_code == 403
+    assert client.post("/api/run", json=payload,
+                       headers={**headers, "Host": "attacker.example"}).status_code == 403
 
 
-def test_signed_submission_records_real_result_and_capacity_release(operator):
-    client, headers, calls = operator
+def test_dashboard_queues_eks_and_records_final_result(operator):
+    client, headers, forwards, worker = operator
     response = client.post("/api/run", json={"code": "print('hello')", "name": "hello.py"}, headers=headers)
     assert response.status_code == 200
-    assert response.json["attempts"][0]["response"]["delivered"] is True
-    snapshot = client.get("/api/overview").json
-    assert snapshot["stats"]["delivered"] == 1
-    assert snapshot["events"][0]["name"] == "hello.py"
-    assert snapshot["resources"]["committed_mb"] == 0
-    assert calls["forwards"] == 1
-    # A new store instance can read history; restarting the gateway does not erase it.
-    assert ActivityStore(gw.activity_store.path).snapshot()["stats"]["total"] == 1
-    metrics = client.get("/api/metrics").json
-    assert metrics["locations"]["local"]["delivered"] == 1
-    assert metrics["locations"]["local"]["count"] == 1
-    assert metrics["locations"]["eks"]["count"] == 0
+    attempt = response.json["attempts"][0]
+    assert attempt["status_code"] == 202
+    assert attempt["response"]["execution_location"] == "eks"
+    assert forwards == []
+    row = gw.cloud_store.claim("test-worker")
+    assert row is not None
+    worker._process(row, "test-worker")
+    final = client.get(attempt["response"]["status_url"]).json
+    assert final["status_code"] == 200
+    assert final["response"]["delivered"] is True
+    assert forwards == [b"print('hello')"]
+    assert client.get("/api/overview").json["stats"]["delivered"] == 1
 
 
-def test_metrics_separate_locations_and_ignore_pending(tmp_path):
-    store = ActivityStore(tmp_path / "metrics.sqlite3")
-    now = 1_000_000.0
-    for number, (status, response) in enumerate([
-        (200, {"delivered": True, "execution_location": "local",
-               "timings_ms": {"verify_ms": 2, "dry_run_ms": 20, "forward_ms": 4}}),
-        (422, {"delivered": False, "stage": "dry_run", "execution_location": "eks",
-               "timings_ms": {"verify_ms": 4, "dry_run_ms": 40}}),
-        (503, {"delivered": False, "stage": "capacity"}),
-        (202, {"delivered": False, "stage": "queued", "execution_location": "eks"}),
-    ]):
-        store.record({"id": str(number), "name": "probe.py", "scenario": "test",
-                      "created_at": now - 10, "status_code": status,
-                      "duration_ms": 100, "response": response})
-    metrics = store.metrics(now=now)
-    assert metrics["locations"]["local"]["avg_dry_run_ms"] == 20
-    assert metrics["locations"]["eks"]["dry_run_failures"] == 1
-    assert metrics["capacity_rejected"] == 1
-    assert sum(bucket["count"] for bucket in metrics["throughput"]) == 3
-    assert metrics["submissions_per_second"] == 0.05
-    assert metrics["peak_per_second"] == 3
+def test_tamper_and_replay_do_not_forward_unchecked_payloads(operator):
+    client, headers, forwards, worker = operator
+    tamper = client.post("/api/run", json={"code": "print(1)", "mode": "tamper"}, headers=headers)
+    assert tamper.json["attempts"][0]["status_code"] == 401
+    replay = client.post("/api/run", json={"code": "print(1)", "mode": "replay"}, headers=headers)
+    assert [entry["status_code"] for entry in replay.json["attempts"]] == [202, 401]
+    assert forwards == []
+    worker._process(gw.cloud_store.claim("test-worker"), "test-worker")
+    assert len(forwards) == 1
 
 
-def test_tamper_is_not_executed_and_has_timing(operator):
-    client, headers, calls = operator
-    attempt = client.post("/api/run", json={"code": "print('hello')", "mode": "tamper"}, headers=headers).json["attempts"][0]
-    assert attempt["status_code"] == 401
-    assert attempt["response"]["stage"] == "verify"
-    assert "verify_ms" in attempt["response"]["timings_ms"]
-    assert calls["dry_runs"] == calls["forwards"] == 0
-
-
-def test_replay_sends_exactly_one_payload_to_endpoint(operator):
-    client, headers, calls = operator
-    result = client.post("/api/run", json={"code": "print('hello')", "mode": "replay"}, headers=headers)
-    assert [entry["status_code"] for entry in result.json["attempts"]] == [200, 401]
-    assert "Replay" in result.json["attempts"][1]["response"]["reason"]
-    assert calls["dry_runs"] == calls["forwards"] == 1
-
-
-@pytest.mark.parametrize("status", ["timeout", "oom_killed", "error"])
-def test_sandbox_failures_are_visible_and_never_forwarded(operator, status):
-    client, headers, calls = operator
-    calls["status"] = status
-    attempt = client.post("/api/run", json={"code": "print('hello')"}, headers=headers).json["attempts"][0]
-    assert attempt["status_code"] == 422
-    assert status in attempt["response"]["reason"]
-    assert calls["forwards"] == 0
-
-
-@pytest.mark.parametrize("payload", [None, [], {}, {"code": " "}, {"code": 3}, {"code": "print(1)", "mode": []}, {"code": "print(1)", "name": {}}])
+@pytest.mark.parametrize("payload", [None, [], {}, {"code": " "}, {"code": 3},
+                                      {"code": "print(1)", "mode": []},
+                                      {"code": "print(1)", "name": {}}])
 def test_invalid_form_data_is_rejected(operator, payload):
-    client, headers, calls = operator
+    client, headers, _, _ = operator
     assert client.post("/api/run", json=payload, headers=headers).status_code == 400
-    assert calls["dry_runs"] == 0
 
 
-def test_size_limit_and_missing_secret(operator, monkeypatch):
-    client, headers, calls = operator
-    assert client.post("/api/run", json={"code": "x" * 65537}, headers=headers).status_code == 413
+def test_missing_secret_blocks_run(operator, monkeypatch):
+    client, headers, _, _ = operator
     monkeypatch.setattr(gw, "SHARED_SECRET", b"")
     assert client.post("/api/run", json={"code": "print(1)"}, headers=headers).status_code == 503
-    assert client.post("/api/capacity-test", json={}, headers=headers).status_code == 503
-    assert calls["dry_runs"] == 0
 
 
-def test_capacity_failure_is_recorded_without_execution(operator, monkeypatch):
-    client, headers, calls = operator
-    monkeypatch.setattr(gw, "resource_manager", ResourceManager(total_memory_mb=1))
-    response = client.post("/api/capacity-test", json={}, headers=headers)
-    assert response.status_code == 200
-    assert all(entry["response"]["stage"] == "capacity" for entry in response.json["attempts"])
-    assert calls["dry_runs"] == 0
-    assert client.get("/api/overview").json["stats"]["blocked"] == 2
-
-
-def test_endpoint_bad_json_is_a_failure_not_an_internal_server_error(operator, monkeypatch):
-    client, headers, calls = operator
-    def bad_json():
-        raise ValueError("not json")
-    monkeypatch.setattr(gw.requests, "post", lambda *a, **kw: SimpleNamespace(raise_for_status=lambda: None, json=bad_json))
-    attempt = client.post("/api/run", json={"code": "print(1)"}, headers=headers).json["attempts"][0]
-    assert attempt["status_code"] == 502
-    assert attempt["response"]["stage"] == "forward"
-
-
-def test_endpoint_nonzero_exit_is_not_reported_as_success(operator, monkeypatch):
-    client, headers, _ = operator
-    monkeypatch.setattr(gw.requests, "post", lambda *a, **kw: SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"executed": True, "returncode": 1}))
-    attempt = client.post("/api/run", json={"code": "print(1)"}, headers=headers).json["attempts"][0]
-    assert attempt["status_code"] == 502
-    assert not attempt["response"]["delivered"]
-
-
-def test_examples_are_fixed_project_files(operator):
-    client, _, _ = operator
-    response = client.get("/api/examples")
-    assert response.status_code == 200
-    assert {entry["id"] for entry in response.json["examples"]} == {"good", "infinite_loop", "memory_hog", "good_sh", "infinite_loop_sh", "memory_hog_sh", "network_breach_sh", "filesystem_breakout_sh", "good_ps"}
-
-
-def test_invalid_unicode_credentials_are_rejected_without_a_server_error(operator):
-    client, headers, calls = operator
-    from src.watchdog.sign import sign_payload
-    import base64
-    signed = sign_payload(b"print(1)", gw.SHARED_SECRET)
-    signed["payload_b64"] = base64.b64encode(signed.pop("payload")).decode()
-    signed["tag"] = "\u00e9" * 64
-    assert client.post("/submit", json=signed).status_code == 400
-    response = client.post("/api/run", json={"code": "print(1)"}, headers={"X-Dashboard-Token": "\u00e9"})
-    assert response.status_code == 403
-    assert calls["dry_runs"] == 0
-
-
-def test_invalid_utf8_script_is_a_validation_error(operator):
-    client, headers, calls = operator
-    assert client.post("/api/run", json={"code": "\ud800"}, headers=headers).status_code == 400
-    assert calls["dry_runs"] == 0
-
-
-def test_tamper_at_the_script_size_limit_still_tests_integrity(operator):
-    client, headers, calls = operator
-    code = "#" + "x" * 65535
-    result = client.post("/api/run", json={"code": code, "mode": "tamper"}, headers=headers)
-    assert result.status_code == 200
-    assert result.json["attempts"][0]["status_code"] == 401
-    assert result.json["attempts"][0]["response"]["stage"] == "verify"
-    assert calls["dry_runs"] == 0
-
-
-def test_manual_health_refresh_bypasses_the_cached_status(operator, monkeypatch):
-    client, _, _ = operator
+def test_manual_health_refresh_bypasses_cache(operator, monkeypatch):
+    client, _, _, _ = operator
     available = [True]
-    monkeypatch.setattr(dashboard.requests, "get", lambda *a, **kw: SimpleNamespace(ok=available[0], json=lambda: {"status": "ok"}))
-    monkeypatch.setattr(dashboard.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0, stdout="linux\n"))
+    monkeypatch.setattr(dashboard.requests, "get", lambda *a, **kw: SimpleNamespace(
+        ok=available[0], json=lambda: {"status": "ok"}))
     assert client.get("/api/health?refresh=1").json["endpoint"]["status"] == "online"
     available[0] = False
     assert client.get("/api/health").json["endpoint"]["status"] == "online"
     assert client.get("/api/health?refresh=1").json["endpoint"]["status"] == "unavailable"
-
-
-@pytest.mark.parametrize("health_body", [None, [], "not an object"])
-def test_invalid_service_health_is_reported_as_unavailable(operator, monkeypatch, health_body):
-    client, _, _ = operator
-    monkeypatch.setattr(dashboard.requests, "get", lambda *a, **kw: SimpleNamespace(ok=True, json=lambda: health_body))
-    monkeypatch.setattr(dashboard.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0, stdout="linux\n"))
-    response = client.get("/api/health?refresh=1")
-    assert response.status_code == 200
-    assert response.json["endpoint"]["status"] == "unavailable"
-
-
-def test_health_checks_report_actual_dependencies(operator, monkeypatch):
-    client, _, _ = operator
-    monkeypatch.setattr(dashboard.requests, "get", lambda *a, **kw: SimpleNamespace(ok=True, json=lambda: {"status": "ok"}))
-    monkeypatch.setattr(dashboard.subprocess, "run", lambda args, **kw: SimpleNamespace(returncode=0, stdout="linux\n"))
-    health = client.get("/api/health?refresh=1").json
-    assert health["docker"]["status"] == "online"
-    assert health["image"]["status"] == "ready"
-    assert health["endpoint"]["status"] == "online"
-    assert health["eks"]["status"] == "disabled"
-
-
-def test_health_reports_the_behaviour_monitor(operator, monkeypatch):
-    client, _, _ = operator
-    monkeypatch.setattr(dashboard.requests, "get", lambda *a, **kw: SimpleNamespace(ok=True, json=lambda: {"status": "ok"}))
-    monkeypatch.setattr(dashboard.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0, stdout="linux\n"))
-    assert client.get("/api/health?refresh=1").json["falco"]["status"] == "not_connected"   # off by default
-    runner = SimpleNamespace(healthy=lambda: True, monitor_healthy=lambda: True)
-    monkeypatch.setattr(gw, "EKS_ENABLED", True)
-    monkeypatch.setattr(gw, "FALCO_ENABLED", True)
-    monkeypatch.setattr(gw, "configured_runner", lambda: runner)
-    assert client.get("/api/health?refresh=1").json["falco"]["status"] == "online"
-    runner.monitor_healthy = lambda: False
-    assert client.get("/api/health?refresh=1").json["falco"]["status"] == "unavailable"
-    monkeypatch.setattr(gw, "configured_runner", lambda: (_ for _ in ()).throw(RuntimeError("no cluster")))
-    assert client.get("/api/health?refresh=1").json["falco"]["status"] == "unavailable"

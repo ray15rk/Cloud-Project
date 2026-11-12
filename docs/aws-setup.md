@@ -8,14 +8,14 @@ for resource names and the verified image digest.
 ## Sign in and verify the account
 
 Install AWS CLI v2 and configure an authorized profile using your chosen AWS
-sign-in method. Keep credentials outside this repository. The operator's local
-profile is named `cloudproject-sydney`; teammates should use their own profiles.
+sign-in method. Keep credentials outside this repository. Use your own profile
+name in every command below.
 
 Before using EKS, check the identity and region:
 
 ```sh
-aws sts get-caller-identity --profile cloudproject-sydney
-aws eks describe-cluster --profile cloudproject-sydney \
+aws sts get-caller-identity --profile YOUR_PROFILE
+aws eks describe-cluster --profile YOUR_PROFILE \
   --region ap-southeast-2 --name cloudproject-sandbox-sydney \
   --query 'cluster.{status:status,version:version}' --output table
 ```

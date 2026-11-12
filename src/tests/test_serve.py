@@ -19,19 +19,18 @@ def gateway_routes(dashboard_flag):
     return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=ROOT, env=env, check=True).stdout
 
 
-def test_default_threads_exceed_slots():
-    assert choose_threads(4, None) == 8
+def test_default_threads():
+    assert choose_threads(None) == 8
 
 
-def test_explicit_threads_above_slots_are_allowed():
-    assert choose_threads(4, "6") == 6
+def test_explicit_threads_are_allowed():
+    assert choose_threads("6") == 6
 
 
-@pytest.mark.parametrize("value", ["1", "4"])
-def test_threads_at_or_below_slots_are_rejected(value):
-    # waitress's own default (4) equals the slot count and would hide overflow from the capacity gate
-    with pytest.raises(SystemExit, match="greater than"):
-        choose_threads(4, value)
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_nonpositive_threads_are_rejected(value):
+    with pytest.raises(SystemExit, match="at least 1"):
+        choose_threads(value)
 
 
 def test_dashboard_is_on_by_default():

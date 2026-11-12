@@ -1,81 +1,115 @@
-# Use the Sydney EKS cluster from macOS or Linux
+# EKS setup for macOS and Linux
 
-This guide runs a local copy of the gateway against the existing
-`cloudproject-sandbox-sydney` cluster in `ap-southeast-2`. It does not create
-a new AWS cluster. For Windows, use the [PowerShell guide](eks-teammate-setup-windows.md).
-See [AWS access](aws-setup.md) and the [team handoff](eks-team-handoff.md)
-for the local/cloud boundary.
+This guide connects your local gateway to the **existing**
+`cloudproject-sandbox-sydney` EKS cluster in `ap-southeast-2`. It does not
+create a new cluster. For PowerShell, use the [Windows guide](eks-teammate-setup-windows.md).
+See [AWS access](aws-setup.md) and [deployment details](../infra/eks/README.md).
 
-## 1. Prepare the local project
+## 1. Install and prepare the project
 
-Install Python 3.11+, Docker Desktop, AWS CLI v2, and a `kubectl` client
-compatible with the cluster's Kubernetes 1.36 version. From the repository
-root, install dependencies and build the local sandbox image:
+Install Python 3.11+, AWS CLI v2, and a
+`kubectl` client compatible with the cluster version shown by
+`aws eks describe-cluster`. Run from the repository root:
+
+The `kubectl` client must be within one Kubernetes minor version of the
+cluster. Check `kubectl version --client` after checking the cluster version;
+for the deployed 1.36 cluster, use a 1.35, 1.36, or 1.37 client.
 
 ```sh
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
-docker build -t cloudproject-sandbox:dev docker/sandbox
+test -f .env || cp env.example .env
+.venv/bin/python -c 'import secrets; print(secrets.token_hex(32))'
 ```
 
-Copy `env.example` to the gitignored `.env` if needed and generate a unique
-`SHARED_SECRET`. Never copy someone else's secret.
+Put the generated value in `.env` as `SHARED_SECRET`. Preserve an existing
+`.env` instead of overwriting it. Keep it out of Git. Docker is not needed
+for gateway dry runs.
 
-## 2. Confirm EKS access
+## 2. Get access to the existing cluster
 
-Use your own authorized AWS CLI profile. The operator must grant your identity
-Kubernetes access to this cluster and allow your current public IP through its
-API endpoint settings. A kubeconfig file by itself grants neither permission.
-Replace `YOUR_PROFILE` and the kubeconfig path with your own values:
+Use **your own** AWS profile. The operator must grant your IAM identity
+EKS/Kubernetes access and allow your current public IP to reach the cluster
+API. Kubeconfig creation does not grant either permission. Replace
+`YOUR_PROFILE` in these commands:
 
 ```sh
 aws sts get-caller-identity --profile YOUR_PROFILE
+aws eks describe-cluster --profile YOUR_PROFILE --region ap-southeast-2 \
+  --name cloudproject-sandbox-sydney --query 'cluster.{status:status,version:version}'
 mkdir -p "$HOME/.kube"
-aws eks update-kubeconfig --profile YOUR_PROFILE \
-  --region ap-southeast-2 --name cloudproject-sandbox-sydney \
-  --alias cloudproject-sandbox-sydney \
+aws eks update-kubeconfig --profile YOUR_PROFILE --region ap-southeast-2 \
+  --name cloudproject-sandbox-sydney --alias cloudproject-sandbox-sydney \
   --kubeconfig "$HOME/.kube/config-cloudproject-sydney"
 KUBECONFIG="$HOME/.kube/config-cloudproject-sydney" \
   kubectl --context cloudproject-sandbox-sydney get nodes
 ```
 
-Verify the account ID is `562358727339` and that at least one node is Ready.
-If authentication or network access fails, resolve it before enabling cloud
-overflow. Do not share AWS credentials or put the public IP allowlist in Git.
+The AWS identity must be in account `562358727339`; check that the cluster is
+active and a node is Ready. If access fails, ask the operator to check your
+access entry and API allowlist. If AWS reports an expired session, run
+`aws login --profile YOUR_PROFILE` and repeat the identity check. If `kubectl`
+times out, compare your current public IP with the cluster's API allowlist;
+ask the operator to add only your current `/32` address for the test and remove
+it afterward. Never share credentials or commit your IP.
 
-## 3. Configure and test the gateway
+Check the Falco Pod before enabling `FALCO_ENABLED=true`:
 
-In your gitignored `.env`, set `EKS_ENABLED=true`,
-`EKS_CONTEXT=cloudproject-sandbox-sydney`, `AWS_REGION=ap-southeast-2`,
-`AWS_PROFILE` to your own profile, and `KUBECONFIG` to your own absolute
-kubeconfig path. Set `EKS_IMAGE` to the immutable Sydney ECR digest shown in
-[deployment details](../infra/eks/README.md). The EKS worker pulls that
-private image using its node role. Set `GATEWAY_URL` to port 8080 if you start
-the project's Nginx proxy, or port 8000 for direct local testing.
+```sh
+KUBECONFIG="$HOME/.kube/config-cloudproject-sydney" \
+  kubectl --context cloudproject-sandbox-sydney -n falco get pods
+```
 
-With Docker Desktop running, start the dashboard from the repository root:
+Expect a Running Pod on each Ready worker node.
+
+## 3. Configure the gateway
+
+Edit `.env`. Replace the example profile and kubeconfig placeholders with
+your values. Use your actual absolute home path, not the literal `$HOME`
+string. Set `EKS_IMAGE` to the digest in [deployment details](../infra/eks/README.md):
+
+```dotenv
+EKS_ENABLED=true
+EKS_CONTEXT=cloudproject-sandbox-sydney
+EKS_IMAGE=PASTE-IMMUTABLE-ECR-IMAGE-AT-SHA256-DIGEST
+AWS_REGION=ap-southeast-2
+AWS_PROFILE=YOUR_PROFILE
+KUBECONFIG=/absolute/path/to/.kube/config-cloudproject-sydney
+GATEWAY_URL=http://127.0.0.1:8000/submit
+FALCO_ENABLED=true
+```
+
+Every verified dry run is queued as an EKS Job. With `FALCO_ENABLED=true`,
+unavailable monitoring blocks delivery. `EKS_ENABLED=false` disables dry-run
+submissions; the gateway never falls back to local Docker.
+
+## 4. Run a smoke test
+
+Start the dashboard from the repository root:
 
 ```sh
 .venv/bin/python -m src.dashboard
 ```
 
-In another terminal, submit the example:
+Open `http://127.0.0.1:8000`. In another terminal:
 
 ```sh
 .venv/bin/python -m src.sender.send src/examples/good.py
 ```
 
-A normal submission should report `execution_location: local`. To demonstrate
-cloud overflow, stop the dashboard with Ctrl+C and restart it with a temporary
-small local budget:
+Expect initial HTTP 202 and a final result with `execution_location: eks`.
+The final result should contain `delivered: true` and a clean Falco verdict.
+The sender polls the returned status URL. To test a blocked network attempt:
 
 ```sh
-LOCAL_MEMORY_BUDGET_MB=1 .venv/bin/python -m src.dashboard
+.venv/bin/python -m src.sender.send src/examples/network_swallowed.py
 ```
 
-Send the example again. Expect HTTP 202 followed by a final result with
-`execution_location: eks`. Stop and restart the dashboard normally afterward.
+Expect initial HTTP 202, then final HTTP 422 with `delivered: false`,
+`execution_location: eks`, and a Falco network finding. Stop the dashboard
+after testing. If temporary API access was granted, have the operator remove
+that `/32` entry and verify the original allowlist is restored.
 
-For local-only use, set `EKS_ENABLED=false`; no AWS access is needed. Cluster
-Autoscaler runs in EKS and scales worker nodes when Pods cannot be scheduled.
-The local gateway only decides whether a submission uses local Docker or EKS.
+For the optional Nginx proxy, set
+`GATEWAY_URL=http://127.0.0.1:8080/submit` and start Nginx separately using
+the [project README](../readme.md).

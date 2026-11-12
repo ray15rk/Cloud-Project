@@ -8,7 +8,6 @@ import os
 
 import secrets
 
-import subprocess
 
 import threading
 
@@ -134,9 +133,12 @@ def register_dashboard(app, gateway):
 
             return jsonify(error="Activity journal unavailable. Check the gateway terminal."), 503
 
-        return jsonify(**snapshot, resources=gateway.resource_manager.snapshot(),
+        return jsonify(**snapshot,
 
-                       cloud={"enabled": gateway.EKS_ENABLED}, configured=bool(gateway.SHARED_SECRET))
+                       cloud={"enabled": gateway.EKS_ENABLED,
+                              "active": gateway.cloud_store.active_count(),
+                              "limit": gateway.cloud_store.max_inflight},
+                       configured=bool(gateway.SHARED_SECRET))
 
 
 
@@ -147,8 +149,6 @@ def register_dashboard(app, gateway):
         try:
 
             return jsonify(**gateway.activity_store.metrics(),
-
-                           local_slots=gateway.resource_manager.snapshot()["slots"],
 
                            cloud_limit=gateway.cloud_store.max_inflight)
 
@@ -268,9 +268,9 @@ def register_dashboard(app, gateway):
 
         try:
 
-            slots = gateway.resource_manager.snapshot()["slots"]
+            limit = gateway.cloud_store.max_inflight
 
-            count = min(slots + 2, 10)
+            count = min(limit + 2, 10)
 
             payload = b'import time\ntime.sleep(2)\nprint("Capacity probe completed")\n'
 
@@ -282,7 +282,7 @@ def register_dashboard(app, gateway):
 
                 attempts = list(pool.map(probe, range(count)))
 
-            return jsonify(attempts=attempts, submitted=count, local_slots=slots)
+            return jsonify(attempts=attempts, submitted=count, cloud_limit=limit)
 
         finally:
 
@@ -327,26 +327,6 @@ def register_dashboard(app, gateway):
                 except (requests.RequestException, ValueError):
 
                     services[key] = {"status": "offline"}
-
-            image = os.environ.get("SANDBOX_IMAGE", "cloudproject-sandbox:dev")
-
-            services["image"] = {"status": "unknown", "name": image}
-
-            try:
-
-                info = subprocess.run(["docker", "info", "--format", "{{.OSType}}"], capture_output=True, text=True, timeout=3)
-
-                services["docker"] = {"status": "online" if info.returncode == 0 and info.stdout.strip() == "linux" else "offline"}
-
-                if services["docker"]["status"] == "online":
-
-                    inspected = subprocess.run(["docker", "image", "inspect", image, "--format", "{{.Id}}"], capture_output=True, text=True, timeout=3)
-
-                    services["image"]["status"] = "ready" if inspected.returncode == 0 else "missing"
-
-            except (OSError, subprocess.TimeoutExpired):
-
-                services["docker"] = {"status": "offline"}
 
             if not gateway.EKS_ENABLED:
 

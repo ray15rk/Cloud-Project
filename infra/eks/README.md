@@ -37,29 +37,32 @@ CoreDNS has a separate policy so DNS continues to work.
 
 ## Check the cluster
 
-Use the AWS CLI profile created for this account:
+Use your own authorized AWS CLI profile and kubeconfig. Replace the
+placeholders below; see the [macOS/Linux](../../docs/eks-teammate-setup.md)
+or [Windows](../../docs/eks-teammate-setup-windows.md) setup guide to create
+your kubeconfig:
 
 ```sh
-aws eks describe-cluster --profile cloudproject-sydney \
+aws eks describe-cluster --profile YOUR_PROFILE \
   --region ap-southeast-2 --name cloudproject-sandbox-sydney \
   --query 'cluster.{status:status,version:version}'
 
-aws eks list-nodegroups --profile cloudproject-sydney \
+aws eks list-nodegroups --profile YOUR_PROFILE \
   --region ap-southeast-2 --cluster-name cloudproject-sandbox-sydney
 
-KUBECONFIG=/Users/rance/.kube/config-cloudproject-sydney \
+KUBECONFIG=/absolute/path/to/your/kubeconfig \
   kubectl --context cloudproject-sandbox-sydney get nodes -L workload
-helm list -n kube-system
+KUBECONFIG=/absolute/path/to/your/kubeconfig \
+  helm --kube-context cloudproject-sandbox-sydney list -n kube-system
 ```
 
-Set `KUBECONFIG=/Users/rance/.kube/config-cloudproject-sydney` in the local
-environment or `.env` before using the Sydney Kubernetes context.
+Set `KUBECONFIG` to your own absolute path in `.env` before running the gateway.
 
 If a run fails before creating a Job, first check `aws sts get-caller-identity
---profile cloudproject-sydney`. An expired AWS login can make the kubeconfig's
+--profile YOUR_PROFILE`. An expired AWS login can make the kubeconfig's
 credential command fail. The EKS runner retries a missing token three times and
-then logs `Kubernetes client setup` with a clear authentication error; refresh
-the session with `aws login --profile cloudproject-sydney` before retrying.
+then logs `Kubernetes client setup` with an authentication error. Refresh your
+session using your AWS sign-in method before retrying.
 
 ## Sandbox image
 
@@ -70,56 +73,21 @@ immutable digest rather than a mutable tag:
 562358727339.dkr.ecr.ap-southeast-2.amazonaws.com/cloudproject-sandbox@sha256:a2a31397c0f6a17856138c71ad14300b1e592ccc46e3ee0f61d7167911c5bffa
 ```
 
-This digest is the current Python/Bash/PowerShell sandbox image, verified in ECR on
-2026-11-01. Update `EKS_IMAGE` when a new image is built and pushed.
+This Python/Bash/PowerShell image digest was verified in ECR on 2026-11-01.
+Confirm it is still available before use. Update `EKS_IMAGE` when a new image
+is built and pushed.
 
-## Run the gateway on this Mac
+## Run a local gateway against EKS
 
-Keep AWS credentials outside the repository. Set these values in the gitignored
-`.env`, alongside the generated `SHARED_SECRET` and existing local service URLs:
+Follow the [macOS/Linux](../../docs/eks-teammate-setup.md) or
+[Windows](../../docs/eks-teammate-setup-windows.md) guide for complete install,
+per-user configuration, and smoke-test commands. Every verified dry run is
+queued as an EKS Job. Submissions return HTTP 202 while queued, followed by a
+result with `execution_location: eks` when complete.
 
-```dotenv
-LOCAL_MEMORY_BUDGET_MB=256
-EKS_ENABLED=true
-EKS_CONTEXT=cloudproject-sandbox-sydney
-EKS_IMAGE=562358727339.dkr.ecr.ap-southeast-2.amazonaws.com/cloudproject-sandbox@sha256:a2a31397c0f6a17856138c71ad14300b1e592ccc46e3ee0f61d7167911c5bffa
-EKS_MAX_INFLIGHT=3
-EXECUTION_MODE=cloud
-FALCO_ENABLED=true
-AWS_REGION=ap-southeast-2
-AWS_PROFILE=cloudproject-sydney
-KUBECONFIG=/Users/rance/.kube/config-cloudproject-sydney
-GATEWAY_URL=http://127.0.0.1:8080/submit
-```
-
-From the project directory, start the dashboard:
-
-```sh
-.venv/bin/python -m src.dashboard
-```
-
-Open `http://127.0.0.1:8000`. With the project's Nginx proxy running on port
-8080, submit an example from another terminal:
-
-```sh
-.venv/bin/python -m src.sender.send src/examples/good.py
-```
-
-With `EXECUTION_MODE=cloud`, every dry run is an EKS Job. To demonstrate the
-older hybrid overflow mode, restart the dashboard with a temporary low local
-memory budget and `EXECUTION_MODE=hybrid`:
-
-```sh
-EXECUTION_MODE=hybrid LOCAL_MEMORY_BUDGET_MB=1 .venv/bin/python -m src.dashboard
-```
-
-Cloud-first and overflow submissions first return HTTP 202 while the EKS Job is
-queued, then return a completed result with `execution_location: eks`. Restart
-the dashboard normally afterward to restore the configured cloud-first mode.
-
-The gateway's cloud path and Cluster Autoscaler's node scaling are separate:
-the gateway chooses EKS when local capacity is insufficient; Cluster Autoscaler
-adds a worker node only when Kubernetes cannot schedule a Pod on existing nodes.
+The gateway's EKS queue and Cluster Autoscaler's node scaling are separate.
+Cluster Autoscaler adds a worker node only when Kubernetes cannot schedule a
+Pod on existing nodes.
 
 ## Verified behavior
 
@@ -129,6 +97,10 @@ adds a worker node only when Kubernetes cannot schedule a Pod on existing nodes.
 - After the workload was deleted, Cluster Autoscaler removed the extra node.
 - A gateway submission completed successfully through EKS and returned
   `execution_location: eks`.
+- On 2026-11-12, a clean direct-gateway submission returned HTTP 202 then
+  HTTP 200 after an EKS/Falco dry run; a network-attempt canary returned HTTP
+  422 without endpoint delivery. The EKS runner now loads the configured
+  `KUBECONFIG` path explicitly.
 - On 2026-11-01, clean Python and Bash submissions completed through the real
   sender, NGINX, gateway, EKS Job, and local endpoint. A network-attempt script
   was rejected by Falco before endpoint delivery.

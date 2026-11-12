@@ -15,17 +15,15 @@ import requests
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
  
-from src.sandbox.sandbox import dry_run
 from src.sandbox.eks_runner import configured_runner
 from src.sandbox.falco_monitor import monitoring_enabled
 from src.watchdog.verifier import NonceStore, VerificationError, verify_payload
 from src.watchdog.sign import SUPPORTED_LANGUAGES
-from src.resource_manager.resource_manager import resource_manager
 from src.gateway.activity import ActivityStore
 from src.gateway.cloud_submissions import CloudCapacityError, CloudSubmissionStore
 from src.gateway.cloud_worker import CloudWorker
 from src.gateway.dashboard import register_dashboard
-from src.ingress import ENDPOINT_TIMEOUT, NOTIFY_TIMEOUT
+from src.ingress import NOTIFY_TIMEOUT
 
 load_dotenv()  # Reads SHARED_SECRET etc.
 
@@ -33,11 +31,6 @@ SHARED_SECRET = os.environ.get("SHARED_SECRET", "").encode("utf-8")
 ENDPOINT_URL = os.environ.get("ENDPOINT_URL", "http://127.0.0.1:5000/execute")
 NOTIFY_URL = os.environ.get("NOTIFY_URL", "")  # Central server's failure inbox
 EKS_ENABLED = os.environ.get("EKS_ENABLED", "false").lower() == "true"
-# "hybrid": local Docker first, EKS only as overflow (the original behaviour).
-# "cloud":  every dry run is an EKS Job, so the gateway host runs no untrusted code and every
-#           run can be watched by Falco. Needs EKS_ENABLED=true.
-EXECUTION_MODE = os.environ.get("EXECUTION_MODE", "hybrid").strip().lower()
-CLOUD_FIRST = EKS_ENABLED and EXECUTION_MODE == "cloud"
 # Behavioural detection (Falco) only exists on the EKS path.
 FALCO_ENABLED = monitoring_enabled()
 
@@ -45,13 +38,10 @@ FALCO_ENABLED = monitoring_enabled()
 def startup_warnings() -> list[str]:
     """Configuration that silently weakens the setup. Printed by the entry points."""
     notes = []
-    if EXECUTION_MODE == "cloud" and not EKS_ENABLED:
-        notes.append("EXECUTION_MODE=cloud has no effect without EKS_ENABLED=true; dry runs stay local.")
+    if not EKS_ENABLED:
+        notes.append("EKS_ENABLED=false: dry-run submissions are unavailable.")
     if FALCO_ENABLED and not EKS_ENABLED:
-        notes.append("FALCO_ENABLED=true has no effect without EKS_ENABLED=true; Falco only watches EKS runs.")
-    if FALCO_ENABLED and EKS_ENABLED and not CLOUD_FIRST:
-        notes.append("Hybrid mode: local Docker dry runs are NOT behaviour-monitored; only EKS overflow is. "
-                     "Set EXECUTION_MODE=cloud to monitor every dry run.")
+        notes.append("FALCO_ENABLED=true has no effect without EKS_ENABLED=true.")
     return notes
 
 app = Flask(__name__)
@@ -120,86 +110,32 @@ def process_submission(body: dict, submission_id=None, name="CLI submission.py",
     
     timings["verify_ms"] = round((time.perf_counter() - t) * 1000, 2)
 
-    # Stage 2a: capacity check that gates the dry run specifically.
-    DRY_RUN_MEMORY_LIMIT = "128m"
-    # Cloud-first never touches the local slot budget, so nothing here depends on the gateway host's capacity
-    local_admitted = False if CLOUD_FIRST else resource_manager.try_admit(DRY_RUN_MEMORY_LIMIT)
-    if not local_admitted and not EKS_ENABLED:
-        notify_failure("capacity", "local host at capacity", nonce)
-        return {"delivered": False, "stage":"capacity", "reason":"local host at capacity", "timings_ms": timings}, 503
+    # Stage 2: every verified dry run is an EKS Job. Never fall back to Docker.
+    if not EKS_ENABLED:
+        notify_failure("dry_run", "EKS dry runs are disabled", nonce)
+        return {"delivered": False, "stage": "dry_run", "reason": "EKS dry runs are disabled",
+                "timings_ms": timings}, 503
 
-    if not local_admitted:
-        submission_id = submission_id or uuid.uuid4().hex
-        try:
-            cloud_store.enqueue(submission_id, message["nonce"], payload, name, scenario,
-                                timings["verify_ms"], language=message["language"])
-        except CloudCapacityError:
-            notify_failure("capacity", "EKS submission limit reached", nonce)
-            return {"delivered": False, "stage": "capacity", "reason": "EKS submission limit reached",
-                    "timings_ms": timings}, 503
-        except sqlite3.IntegrityError:
-            notify_failure("verify", "Replay detected", nonce)
-            return {"delivered": False, "stage": "verify", "reason": "Replay detected",
-                    "timings_ms": timings}, 401
-        except Exception:
-            app.logger.exception("Could not queue EKS submission")
-            notify_failure("capacity", "EKS queue unavailable", nonce)
-            return {"delivered": False, "stage": "capacity", "reason": "EKS queue unavailable",
-                    "timings_ms": timings}, 503
-        return {"delivered": False, "stage": "queued", "execution_location": "eks",
-                "submission_id": submission_id, "status_url": f"/submissions/{submission_id}",
-                "timings_ms": timings}, 202
- 
-    # Stage 2b: resource-bounded dry run. Since this is expensive, it only runs for legit payloads.
-    t = time.perf_counter()
-    execution_location = "local"
+    submission_id = submission_id or uuid.uuid4().hex
     try:
-        result = dry_run(payload, memory_limit=DRY_RUN_MEMORY_LIMIT, language=message["language"])
-
-    except Exception as e:
-        # Fail closed: if the sandbox itself is broken (e.g. Docker not running), the payload is dropped, never forwarded untested
-        print(f"[gateway] dry_run failed unexpectedly: {e}")
-        timings["dry_run_ms"] = round((time.perf_counter() - t) * 1000, 2)
-        notify_failure("dry_run", f"{execution_location} sandbox unavailable: {e}", nonce)
-        return {"delivered": False, "stage": "dry_run", "reason": f"{execution_location} sandbox unavailable",
-                "execution_location": execution_location, "timings_ms": timings}, 503
-    
-    finally:
-        # Container is gone by the time dry_run() returns = success, failure or exception. Release slot unconditioanlly
-        if local_admitted:
-            resource_manager.release(DRY_RUN_MEMORY_LIMIT)
-    timings["dry_run_ms"] = round((time.perf_counter() - t) * 1000, 2)
-
-    if result["status"] != "OK":
-        reason = f'{result["status"]}: {result.get("detail", "")}'.strip(": ")
-        notify_failure("dry_run", reason, nonce)
-        status_code = 503 if result["status"] == "infrastructure_error" else 422
-        return {"delivered": False, "stage": "dry_run", "reason": reason,
-                "execution_location": execution_location, "job_name": result.get("job_name"),
-                "timings_ms": timings}, status_code
- 
-    # Stage 3: forward the ORIGINAL verified payload to the endpoint
-    t = time.perf_counter()
-    try:
-        resp = requests.post(
-            ENDPOINT_URL, data=payload,
-            headers={"Content-Type": "application/octet-stream", "X-Payload-Language": message.get("language", "python")}, timeout=ENDPOINT_TIMEOUT,
-        )
-        resp.raise_for_status()
-        endpoint_response = resp.json()
-        if not isinstance(endpoint_response, dict) or not endpoint_response.get("executed") or endpoint_response.get("returncode") != 0:
-            raise ValueError("endpoint did not execute the script successfully")
-    except (requests.RequestException, ValueError) as e:
-        timings["forward_ms"] = round((time.perf_counter() - t) * 1000, 2)
-        notify_failure("forward", f"endpoint unreachable: {e}", nonce)
-        return {"delivered": False, "stage": "forward", "reason": "endpoint unreachable",
-                "execution_location": execution_location, "job_name": result.get("job_name"),
-                "timings_ms": timings}, 502
-    timings["forward_ms"] = round((time.perf_counter() - t) * 1000, 2)
- 
-    return {"delivered": True, "endpoint_response": endpoint_response,
-            "execution_location": execution_location, "job_name": result.get("job_name"),
-            "timings_ms": timings}, 200
+        cloud_store.enqueue(submission_id, message["nonce"], payload, name, scenario,
+                            timings["verify_ms"], language=message["language"])
+    except CloudCapacityError:
+        notify_failure("capacity", "EKS submission limit reached", nonce)
+        return {"delivered": False, "stage": "capacity", "reason": "EKS submission limit reached",
+                "timings_ms": timings}, 503
+    except sqlite3.IntegrityError:
+        notify_failure("verify", "Replay detected", nonce)
+        return {"delivered": False, "stage": "verify", "reason": "Replay detected",
+                "timings_ms": timings}, 401
+    except Exception:
+        app.logger.exception("Could not queue EKS submission")
+        notify_failure("capacity", "EKS queue unavailable", nonce)
+        return {"delivered": False, "stage": "capacity", "reason": "EKS queue unavailable",
+                "timings_ms": timings}, 503
+    return {"delivered": False, "stage": "queued", "execution_location": "eks",
+            "submission_id": submission_id, "status_url": f"/submissions/{submission_id}",
+            "timings_ms": timings}, 202
 
 
 def tracked_submission(body, name="CLI submission.py", scenario="external"):
