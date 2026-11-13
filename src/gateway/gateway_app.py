@@ -1,5 +1,5 @@
-# Pipeline gateway; Responsible for receiving payloads, verifying HMAC, and forwarding to sandbox for dry run
-# Does this: verify HMAC (watchdog)  -> dry run (sandbox)  ->  forward to endpoint
+# Pipeline gateway; Responsible for receiving payloads, verifying HMAC, running EKS dry-run, and forwarding to the edge endpoint
+# Does this: verify HMAC (watchdog) -> EKS dry run (eks_runner + falco_monitor) -> forward to endpoint
 # Any rejection drops the payload (omission failure) and notifies the central server
 
 import base64
