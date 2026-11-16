@@ -79,9 +79,9 @@ query succeeds. If `aws sts` fails, check your invitation, selected project,
 and login. If `describe-cluster` is denied, ask the owner to check EKS
 permissions. If `kubectl` says Forbidden or Unauthorized, ask the owner to
 check the actual role, existing EKS access entry, and Kubernetes permissions.
-If `kubectl` times out (`i/o timeout` on port 443), your current public IP is not in the cluster's allowed CIDR list. Check your IP and append it dynamically using your assumed role:
+If `kubectl` times out (`i/o timeout` on port 443), your current public IP is not in the cluster's allowed CIDR list. You do not need to ask the owner to add your IP; your invited AWS Builder session has permissions to append it directly:
 ```powershell
-$myIp = (Invoke-WebRequest -Uri "https://checkip.amazonaws.com").Content.Trim()
+$myIp = (Invoke-WebRequest -Uri "https://checkip.amazonaws.com" -UseBasicParsing).Content.Trim()
 $current = (aws eks describe-cluster --name cloudproject-sandbox-sydney --profile cloudproject-sydney --query "cluster.resourcesVpcConfig.publicAccessCidrs" --output text) -split "`t"
 $updated = ($current + "$myIp/32" | Select-Object -Unique) -join ","
 aws eks update-cluster-config --name cloudproject-sandbox-sydney --resources-vpc-config publicAccessCidrs="$updated" --profile cloudproject-sydney

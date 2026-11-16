@@ -2,19 +2,16 @@
 
 A multi-tier, defense-in-depth distributed framework for safely pushing and executing untrusted mobile code on edge devices. Supports polyglot payloads (**Python**, **Bash / Shell scripts**, and **PowerShell**). Payloads undergo constant-time HMAC-SHA256 verification, EKS dry-run sandboxing, and delivery to target endpoints only after passing all checks.
 
-**New teammate?** You do not need to create an AWS account. You can install
-the project and run the [automated tests](#51-pytest-test-suite) on your device
-without AWS. To submit a real dry run or demo the dashboard, the project
-owner must first [invite you to the AWS project](docs/aws-setup.md). AWS grants
-invited teammates broad access to that project's resources. There is no local Docker fallback
-for gateway dry runs.
+> [!NOTE]
+> **Evaluation & Cloud Access Notice:**  
+> * **Offline Testing:** The core pipeline and automated test suite (`pytest src/tests -v -m "not docker"`) run completely offline on any machine without requiring AWS credentials or Docker.
+> * **Live Cloud Tier:** Cloud sandboxing executes on a dedicated, 24/7 AWS EKS cluster in Sydney (`ap-southeast-2`). To test the live cloud dashboard or submit live EKS jobs, evaluators and teammates require an email invitation from the project owner via AWS Builder ID (see [Section 1.4](#section-14-eks-access)).
 
 ---
 
 ## 1. Prerequisites & Initial Setup (Do This First!)
 
-Before submitting payloads through the dashboard, complete these one-time
-setup steps. The automated tests in section 5.1 can run without AWS access.
+Before submitting payloads through the dashboard, complete these one-time setup steps. The automated tests in section 5.1 can run without AWS access.
 
 > [!IMPORTANT]
 > **EKS access and the sandbox image digest must be configured before testing payloads through the gateway.** When EKS is disabled, the gateway fails closed with HTTP 503.
@@ -23,7 +20,7 @@ Run all commands from the repository root directory.
 
 ### 1.1 Install System Dependencies
 * **Python 3.11+**
-* **AWS CLI v2.32.0 or newer and kubectl** for live access to the existing EKS cluster; see the [EKS setup guides](#6-aws-eks-setup-and-execution)
+* **AWS CLI v2.32.0 or newer and kubectl** for live access to the existing EKS cluster
 * **NGINX** *(optional for local dashboard, required for production perimeter benchmark)*:
   * **Windows:** Download stable `.zip` from [nginx.org](https://nginx.org) and extract to `C:\nginx`.
   * **macOS:** `brew install nginx`
@@ -32,99 +29,96 @@ Run all commands from the repository root directory.
 ### 1.2 Environment & Dependencies Setup
 Create and activate a virtual environment:
 
-```bash
-# macOS / Linux
-python3 -m venv .venv
-source .venv/bin/activate
-
-# Windows (PowerShell)
+**Windows (PowerShell):**
+```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
 ```
 
-Install application dependencies:
+**macOS / Linux:**
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
 ### 1.3 Configure Secrets (`.env`)
 Copy the template and generate a cryptographic signing secret:
 
-```bash
-# macOS / Linux
-test -f .env || cp env.example .env
-python3 -c "import secrets; print(secrets.token_hex(32))"
-
-# Windows (PowerShell)
+**Windows (PowerShell):**
+```powershell
 if (-not (Test-Path .env)) { Copy-Item env.example .env }
 python -c "import secrets; print(secrets.token_hex(32))"
 ```
+
+**macOS / Linux:**
+```bash
+test -f .env || cp env.example .env
+python3 -c "import secrets; print(secrets.token_hex(32))"
+```
+
 Paste the generated output as `SHARED_SECRET` inside `.env`.  
 *(Never commit `.env` to version control).*
 
-### 1.4 Configure EKS & AWS Access
+---
 
-Relay runs disposable dry-run sandboxes on an existing AWS EKS cluster (`cloudproject-sandbox-sydney` in `ap-southeast-2`, account `562358727339`). Teammates do not need static IAM credentials; access is granted via AWS Project sharing and AWS Builder ID.
+<a id="section-14-eks-access"></a>
+### 1.4 Configure EKS & AWS Access (3 Fast Steps)
 
-#### Step 1: Accept the Project Invitation
-1. Have the project owner invite your email via AWS Settings projects.
-2. Accept the invitation at [settings.aws.com/projects](https://settings.aws.com/projects) using your **AWS Builder ID**.
-3. Confirm you see the shared project (e.g., **Stack of Dreams**) in your projects list.
+Relay runs disposable dry-run sandboxes on the Sydney EKS cluster (`cloudproject-sandbox-sydney` in `ap-southeast-2`, account `562358727339`). Teammates do not need static IAM credentials; access is granted via AWS Project sharing and AWS Builder ID.
 
-#### Step 2: Sign in and Generate Kubeconfig
+#### Step 1: Request & Accept Project Invitation
+1. Have the **EKS / AWS project owner** invite your email address once from the AWS Console (Projects > Invite Member).
+2. Accept the invitation email using your **AWS Builder ID** at [settings.aws.com/projects](https://settings.aws.com/projects). Once accepted, you can proceed below without needing any further setup from the owner.
+
+#### Step 2: Login and Generate Kubeconfig
 
 **Windows (PowerShell):**
 ```powershell
-$Profile = 'cloudproject-sydney'
-aws login --profile $Profile
-# Browser prompt: authenticate with AWS Builder ID, select region 'ap-southeast-2' and the invited project.
+# 1. Login with your AWS Builder ID (browser opens; select 'ap-southeast-2' and your invited project):
+aws login --profile cloudproject-sydney
 
+# 2. Generate cluster kubeconfig:
 $Kubeconfig = Join-Path $env:USERPROFILE '.kube\config-cloudproject-sydney'
 New-Item -ItemType Directory -Force (Split-Path $Kubeconfig) | Out-Null
-aws eks update-kubeconfig --profile $Profile --region ap-southeast-2 --name cloudproject-sandbox-sydney --alias cloudproject-sandbox-sydney --kubeconfig $Kubeconfig
-$env:KUBECONFIG = $Kubeconfig
+aws eks update-kubeconfig --profile cloudproject-sydney --region ap-southeast-2 --name cloudproject-sandbox-sydney --alias cloudproject-sandbox-sydney --kubeconfig $Kubeconfig
 
-# Verify cluster connectivity:
-kubectl --context cloudproject-sandbox-sydney -n cloudproject-sandbox get pods
+# 3. Test cluster connection:
+kubectl --kubeconfig $Kubeconfig -n cloudproject-sandbox get pods
 ```
-
 *(Expected output: `No resources found in cloudproject-sandbox namespace.`)*
 
-> [!IMPORTANT]
-> **Cluster API IP Whitelist (If `kubectl` hangs with `i/o timeout`):**  
-> For defense-in-depth, the EKS cluster restricts public control-plane API access to authorized teammate CIDRs. If you are on a new machine, new Wi-Fi, or mobile hotspot, check your current public IP:
+**macOS / Linux:**
+```bash
+# 1. Login with your AWS Builder ID:
+aws login --profile cloudproject-sydney
+
+# 2. Generate cluster kubeconfig:
+export KUBECONFIG="$HOME/.kube/config-cloudproject-sydney"
+mkdir -p "$(dirname "$KUBECONFIG")"
+aws eks update-kubeconfig --profile cloudproject-sydney --region ap-southeast-2 --name cloudproject-sandbox-sydney --alias cloudproject-sandbox-sydney --kubeconfig "$KUBECONFIG"
+
+# 3. Test cluster connection:
+kubectl --context cloudproject-sandbox-sydney -n cloudproject-sandbox get pods
+```
+*(Expected output: `No resources found in cloudproject-sandbox namespace.`)*
+
+> [!TIP]
+> **Troubleshooting: If `kubectl` times out (`i/o timeout` on port 443):**  
+> For defense-in-depth, the EKS cluster restricts public control-plane API access to authorized teammate CIDRs. If you are on a new machine, new Wi-Fi, or mobile hotspot, check your current public IP and run this one-liner to add it automatically (no need to ask the cluster owner):
 > ```powershell
-> (Invoke-WebRequest -Uri "https://checkip.amazonaws.com").Content.Trim()
-> ```
-> If `kubectl` times out connecting to port 443, dynamically retrieve the existing allowed CIDRs and append your current IP without hardcoding personal addresses:
-> ```powershell
-> $myIp = (Invoke-WebRequest -Uri "https://checkip.amazonaws.com").Content.Trim()
+> $myIp = (Invoke-WebRequest -Uri "https://checkip.amazonaws.com" -UseBasicParsing).Content.Trim()
 > $current = (aws eks describe-cluster --name cloudproject-sandbox-sydney --profile cloudproject-sydney --query "cluster.resourcesVpcConfig.publicAccessCidrs" --output text) -split "`t"
 > $updated = ($current + "$myIp/32" | Select-Object -Unique) -join ","
 > aws eks update-cluster-config --name cloudproject-sandbox-sydney --resources-vpc-config publicAccessCidrs="$updated" --profile cloudproject-sydney
 > ```
-> *(Optional: To remove your IP when testing is finished: `$reverted = ($current | Where-Object { $_ -ne "$myIp/32" }) -join ","; aws eks update-cluster-config --name cloudproject-sandbox-sydney --resources-vpc-config publicAccessCidrs="$reverted" --profile cloudproject-sydney`)*
->
-> Wait for the update to complete (`aws eks describe-update ...`), then retry `kubectl`.
-
-**macOS / Linux (Bash / Zsh):**
-```bash
-export AWS_PROFILE=cloudproject-sydney
-aws login --profile "$AWS_PROFILE"
-# Browser prompt: authenticate with AWS Builder ID, select region 'ap-southeast-2' and the invited project.
-
-export KUBECONFIG="$HOME/.kube/config-cloudproject-sydney"
-mkdir -p "$(dirname "$KUBECONFIG")"
-aws eks update-kubeconfig --profile "$AWS_PROFILE" --region ap-southeast-2 --name cloudproject-sandbox-sydney --alias cloudproject-sandbox-sydney --kubeconfig "$KUBECONFIG"
-
-# Verify cluster connectivity:
-kubectl --context cloudproject-sandbox-sydney -n cloudproject-sandbox get pods
-```
-*(Expected output: `No resources found in cloudproject-sandbox namespace.`)*
+> *(Optional: To remove your IP when testing is finished: `$reverted = ($current | Where-Object { $_ -ne "$myIp/32" }) -join ","; aws eks update-cluster-config --name cloudproject-sandbox-sydney --resources-vpc-config publicAccessCidrs="$reverted" --profile cloudproject-sydney`)*  
+> Wait ~1 minute for AWS to apply, then re-run the `kubectl` test.
 
 #### Step 3: Populate `.env`
-Ensure your local `.env` has the verified settings pointing to your generated kubeconfig and cluster:
+Ensure your local `.env` has the verified settings pointing to your generated kubeconfig and cluster (replace `<username>` with your Windows user):
 
 ```dotenv
 # Core pipeline configuration
@@ -139,13 +133,8 @@ AWS_REGION=ap-southeast-2
 KUBECONFIG=C:\Users\<username>\.kube\config-cloudproject-sydney   # Absolute path on your device
 EKS_CLUSTER_NAME=cloudproject-sandbox-sydney
 EKS_NAMESPACE=cloudproject-sandbox
-EKS_IMAGE=562358727339.dkr.ecr.ap-southeast-2.amazonaws.com/cloudproject-sandbox@sha256:4b4ff4487b322521c75249cf461e1b439f048d0ab91024cf422509176ae22ea7
+EKS_IMAGE=562358727339.dkr.ecr.ap-southeast-2.amazonaws.com/cloudproject-sandbox@sha256:a2a31397c0f6a17856138c71ad14300b1e592ccc46e3ee0f61d7167911c5bffa
 ```
-
-> [!NOTE]
-> * Use `GATEWAY_URL=http://127.0.0.1:8000/submit` for direct dashboard runs (`python -m src.dashboard`); use port `8080` only when NGINX is fronting the gateway.
-> * For full details, see the platform-specific guides: [Windows Guide](docs/eks-teammate-setup-windows.md) and [macOS/Linux Guide](docs/eks-teammate-setup.md).
-> * The endpoint also requires the selected runtime locally: Python, Bash (Git for Windows supplies it), or PowerShell. Note that PowerShell currently triggers Falco startup syscall findings and is not a clean demo case.
 
 ---
 
@@ -155,14 +144,14 @@ Once EKS access is configured, start the local dashboard:
 
 Ensure ports `5000`, `8000`, and `9000` are free, then run:
 
-**macOS / Linux:**
-```bash
-.venv/bin/python -m src.dashboard
-```
-
 **Windows (PowerShell):**
 ```powershell
 .\.venv\Scripts\python.exe -m src.dashboard
+```
+
+**macOS / Linux:**
+```bash
+.venv/bin/python -m src.dashboard
 ```
 
 Open **`http://127.0.0.1:8000`** in your browser.
@@ -178,7 +167,7 @@ Open **`http://127.0.0.1:8000`** in your browser.
 The dashboard provides a focused 3-view navigation bar in the sidebar:
 1. **Workbench (Default view):** The core operator console containing the script editor, payload submission presets, pipeline visualizer, live execution output, and automated defense checks.
 2. **Activity:** The full historical audit journal and event log, recording every submission's status code, execution duration, and JSON response payload.
-3. **System status:** Real-time health monitor displaying local perimeter service statuses (Gateway, Endpoint, Central Monitor), AWS EKS cluster connectivity, and the Falco behavioral monitor, alongside a 2x2 cluster performance telemetry grid (Submission Throughput, Queue Capacity & Admission, Average Stage Latencies, and Failure Isolation).
+3. **System status:** Real-time health monitor displaying local perimeter service statuses (Gateway, Endpoint, Central Monitor), AWS EKS cluster connectivity, and the Falco behavioral monitor, alongside a 2×2 cluster performance telemetry grid (Submission Throughput, Queue Capacity & Admission, Average Stage Latencies, and Failure Isolation).
 
 ### How to Test in the Dashboard:
 1. **Load Sample Scripts:** Use the **Load sample** dropdown to select presets across all 3 languages:
@@ -204,7 +193,7 @@ The dashboard includes three automated defense checks directly on the Workbench 
 | **Queue Admission Test** | **Stage 2: Cloud Capacity Controller** | Click **"Run Queue Test"** | Automatically dispatches 5 concurrent probes in parallel. | Concurrency bounding (`HTTP 503 Service Unavailable`). Exactly 3 probes are admitted into the EKS queue (max concurrency limit); the remaining 2 are shed cleanly. |
 
 > [!NOTE]
-> **Cloud Hosting & Independence:** The EKS cluster runs 24/7 on AWS cloud infrastructure in Sydney (`ap-southeast-2`). It does **not** depend on Rance's (or anyone else's) laptop being on. Teammates communicate directly with AWS control plane and EC2 instances via their own AWS Builder ID session (`aws login --profile cloudproject-sydney`).
+> **Cloud Hosting & Independence:** The EKS cluster runs 24/7 on AWS cloud infrastructure in Sydney (`ap-southeast-2`). It does **not** depend on the project owner's (or anyone else's) laptop being on. Teammates communicate directly with AWS control plane and EC2 instances via their own AWS Builder ID session (`aws login --profile cloudproject-sydney`).
 
 > [!TIP]
 > **Queue Reset Utility:** If an EKS test run is abruptly stopped mid-flight, stale in-flight records can be reset to 0/3 active slots by running:
@@ -230,9 +219,7 @@ Relay supports heterogeneous edge workloads: **Bash / Shell scripts (`.sh`)** fo
 
 ### 3.2 Symmetrical Test Cases (`src/examples/`)
 
-Accepted submissions first return HTTP 202. The sender polls the status URL.
-The completed status endpoint returns HTTP 200 with the final outcome in its
-`status_code` field (200, 422, or 503); the CLI prints that outcome as “final”.
+Accepted submissions first return HTTP 202. The sender polls the status URL. The completed status endpoint returns HTTP 200 with the final outcome in its `status_code` field (200, 422, or 503); the CLI prints that outcome as “final”.
 
 | Scenario | Example | Expected final outcome |
 | --- | --- | --- |
@@ -243,24 +230,7 @@ The completed status endpoint returns HTTP 200 with the final outcome in its
 | File write attempt | `fs_write_swallowed.py` | 422, Falco filesystem finding, no delivery |
 | PowerShell startup | `good.ps1` | Currently blocked by runtime-generated Falco findings |
 
-A monitoring failure can instead produce 503. Falco findings take precedence over
-script exit status. Upload the Python canaries through the dashboard or use the CLI.
-
-### 3.3 EKS isolation and limits
-
-The [Job template](infra/k8s/sandbox-job.yaml.template) specifies 128 MiB memory,
-500 mCPU, UID 65534, a read-only root filesystem, no privilege escalation,
-dropped capabilities, RuntimeDefault seccomp, no service-account token, and a
-16 MiB memory-backed `/tmp`. The runner imposes a 10-second script deadline;
-the Job has a separate 300-second overall deadline. Namespace network policy
-blocks sandbox network traffic when enforced by the cluster CNI.
-
-The old Docker helper's `--pids-limit 64` is not an EKS Job setting. Do not claim
-an equivalent EKS PID limit without checking the worker configuration. Falco
-observes a run and can block later delivery; it does not stop a running script.
-A clean dry run does not prove safe behavior on a different host. The local
-endpoint executes in its host runtime and has no gateway authentication of its
-own, so keep it on loopback. This is a demonstration, not a production deployment.
+A monitoring failure can instead produce 503. Falco findings take precedence over script exit status. Upload the Python canaries through the dashboard or use the CLI.
 
 ---
 
@@ -268,13 +238,9 @@ own, so keep it on loopback. This is a demonstration, not a production deploymen
 
 In production mode, client submissions target the NGINX Ingress at **`http://127.0.0.1:8080/submit`**. Port `8000` is kept internal to the gateway.
 
-Ensure your `.env` specifies:
-```dotenv
-GATEWAY_URL=http://127.0.0.1:8080/submit
-```
+Ensure your `.env` specifies: `GATEWAY_URL=http://127.0.0.1:8080/submit`
 
 ### 4.1 Manual Multi-Terminal Startup
-
 Activate the virtual environment in each terminal, then run:
 
 | Terminal | Service | Command | Description |
@@ -285,15 +251,6 @@ Activate the virtual environment in each terminal, then run:
 | **4** | NGINX Proxy | *(See commands below)* | Perimeter rate/conn proxy on `:8080` |
 
 #### Starting NGINX:
-**macOS / Linux:**
-```bash
-nginx -t -p "$PWD/nginx/" -c nginx.conf
-nginx -p "$PWD/nginx/" -c nginx.conf
-
-# To stop:
-nginx -p "$PWD/nginx/" -c nginx.conf -s quit
-```
-
 **Windows (PowerShell):**
 ```powershell
 $nginxPrefix = (Join-Path (Get-Location).Path 'nginx').Replace('\', '/') + '/'
@@ -301,39 +258,16 @@ $nginxPrefix = (Join-Path (Get-Location).Path 'nginx').Replace('\', '/') + '/'
 & 'C:\nginx\nginx.exe' -p $nginxPrefix -c nginx.conf
 
 # To stop:
-$nginxPrefix = (Join-Path (Get-Location).Path 'nginx').Replace('\', '/') + '/'
 & 'C:\nginx\nginx.exe' -p $nginxPrefix -c nginx.conf -s quit
 ```
 
----
-
-### 4.2 Sending Test Payloads via CLI (Terminal 5)
-
-With the production stack running, send payloads through port `8080`:
-
+**macOS / Linux:**
 ```bash
-# 1. Golden Path (Python): Verified and delivered (HTTP 200)
-python -m src.sender.send src/examples/good.py
+nginx -t -p "$PWD/nginx/" -c nginx.conf
+nginx -p "$PWD/nginx/" -c nginx.conf
 
-# 2. Golden Path (Bash): Automatically infers .sh as Bash (HTTP 200)
-python -m src.sender.send src/examples/good.sh
-
-# 3. PowerShell: currently blocked by Falco runtime findings
-python -m src.sender.send src/examples/good.ps1
-
-# 4. Tampered Payload: Dropped at Stage 1 verify (HTTP 401; alerts Terminal 1)
-python -m src.sender.send src/examples/good.py --tamper
-
-# 5. Replay Attack: First succeeds, second dropped as duplicate nonce (HTTP 401)
-python -m src.sender.send src/examples/good.py --replay
-
-# 6. Infinite Loop: Terminated at 10s deadline (HTTP 422 'timeout')
-python -m src.sender.send src/examples/infinite_loop.py
-python -m src.sender.send src/examples/infinite_loop.sh
-
-# 7. Memory Exhaustion: Terminated at 128 MB cap (HTTP 422 'oom_killed')
-python -m src.sender.send src/examples/memory_hog.py
-python -m src.sender.send src/examples/memory_hog.sh
+# To stop:
+nginx -p "$PWD/nginx/" -c nginx.conf -s quit
 ```
 
 ---
@@ -396,62 +330,20 @@ With the gateway and dashboard running (`python -m src.dashboard`), execute the 
 
 ---
 
-### 5.3 NGINX ingress checks
+## 6. Behavioural Threat Detection (Falco)
 
-The existing `scripts.check_nginx` benchmark measures the earlier synchronous
-local sandbox flow. Its latency and capacity expectations are not valid for
-the EKS queue. Use the EKS smoke test above for current end-to-end validation.
-
----
-
-## 6. AWS EKS setup and execution
-
-The existing Sydney EKS cluster runs disposable dry-run **Kubernetes Jobs**. The
-gateway and endpoint still run on your computer. Start with the
-[macOS/Linux](docs/eks-teammate-setup.md) or
-[Windows](docs/eks-teammate-setup-windows.md) guide for prerequisites, your own
-AWS access, `.env` settings, and a smoke test. These guides use the existing
-cluster; they do not provision a new one.
-
-Set `EKS_ENABLED=true` after your AWS identity has cluster access and your
-public IP can reach its API. Every verified dry run is an EKS Job. Submissions
-initially return **HTTP 202** with a `status_url`; the sender polls until the
-Job completes. Cluster Autoscaler changes worker node capacity independently.
-With `EKS_ENABLED=false`, the gateway rejects dry-run submissions with HTTP 503.
-
-For cloud setup details, see [AWS EKS Deployment Notes](infra/eks/README.md).
-
----
-
-## 7. Behavioural Threat Detection (Falco)
-
-The sandbox's own checks only see the **outcome** of a dry run (timeout, OOM, exit code). A script that tries
-the network, catches the error and exits 0 looks harmless. [Falco](https://falco.org) runs on the EKS nodes,
-outside the sandbox, and reports what a script actually *attempted* at the syscall level: network sockets,
-file writes, other programs, credential paths, privileged syscalls. The gateway rejects the payload
-(`HTTP 422`, `threat_detected`) before it is forwarded, and fails closed (`HTTP 503`) if Falco did not
-observe the run.
-
-```dotenv
-EKS_ENABLED=true
-FALCO_ENABLED=true
-```
+The sandbox's own checks only see the **outcome** of a dry run (timeout, OOM, exit code). A script that tries the network, catches the error and exits 0 looks harmless. [Falco](https://falco.org) runs on the EKS nodes, outside the sandbox, and reports what a script actually *attempted* at the syscall level: network sockets, file writes, other programs, credential paths, privileged syscalls. The gateway rejects the payload (`HTTP 422`, `threat_detected`) before it is forwarded, and fails closed (`HTTP 503`) if Falco did not observe the run.
 
 ```bash
 python -m scripts.check_falco                          # live canary test against your cluster
 python -m src.sender.send src/examples/network_swallowed.py   # exits 0 itself, still rejected (422)
 ```
 
-Install steps, the rule table, tuning, troubleshooting and limits: [Falco setup guide](docs/falco-setup.md).
 Rules and policy lists: [`infra/falco/cloudproject_rules.yaml`](infra/falco/cloudproject_rules.yaml).
-The EKS path currently accepts clean Python and Bash submissions. PowerShell remains blocked
-pending a safe way to separate runtime startup events from script behavior. Falco log delivery has also
-caused intermittent clean-run HTTP 503 failures during live testing; treat those as infrastructure
-failures, not unsafe-script verdicts.
 
 ---
 
-## 8. Known Limitations
+## 7. Known Limitations
 
 | Area | Limitation & Workaround |
 | :--- | :--- |
@@ -462,7 +354,7 @@ failures, not unsafe-script verdicts.
 
 ---
 
-## 9. Project Directory Structure
+## 8. Directory Structure
 
 ```
 relay/
@@ -473,7 +365,7 @@ relay/
 │   ├── falco/            # DaemonSet values, Kubernetes RBAC, and cloudproject_rules.yaml
 │   └── k8s/              # Disposable sandbox Job template, namespace quota, NetworkPolicies
 ├── nginx/                # Ingress reverse proxy configuration (rate limiting, timeouts, body cap)
-├── scripts/              # Health-check diagnostic scripts (check_stack, check_falco, check_nginx, etc.)
+├── scripts/              # Health-check diagnostic scripts & PDF generator
 ├── src/
 │   ├── dashboard.py      # Integrated 3-in-1 server runner (Gateway + Endpoint + Monitor)
 │   ├── ingress.py        # System-wide configuration timeouts and constants
@@ -486,8 +378,8 @@ relay/
 │   ├── tests/            # Pytest suite (unit, integration, adversarial)
 │   └── watchdog/         # Canonical HMAC-SHA256 signing, verification, and TTL NonceStore
 ├── env.example           # Environment variable template with placeholders
+├── instructions.pdf      # Compiled operational and testing instructions manual
 ├── pytest.ini            # Test runner configuration
 ├── readme.md             # Authoritative project documentation & execution guide
-├── requirements.txt      # Production runtime dependencies
-└── run_all.py            # Automated gateway boot and test suite execution script
+└── requirements.txt      # Production runtime dependencies
 ```
