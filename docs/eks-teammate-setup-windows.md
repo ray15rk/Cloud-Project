@@ -39,17 +39,15 @@ Put the generated value in `.env` as `SHARED_SECRET`. Preserve an existing
 `.env` instead of overwriting it. Keep it out of Git. Docker is not needed
 for gateway dry runs.
 
-Never use someone else's `.env`. If you received one, start again from
-`env.example` and generate your own `SHARED_SECRET`; a path such as
-`C:\Users\rance\...` or `/Users/rance/...` points to another person's computer.
+Create `.env` from `env.example` on each device and generate a unique
+`SHARED_SECRET`. Set `KUBECONFIG` to the kubeconfig path on that device.
 
 ## 2. Get access to the existing cluster
 
 Before running the commands, accept the owner's
 [project invitation](aws-setup.md#project-owner-invite-a-teammate) with your
-own AWS Builder ID. You need your own authorized sign-in and network access.
-**Do not ask for or use Rance's AWS access keys.** A local profile or
-kubeconfig cannot grant access by itself.
+own AWS Builder ID. You need an authorized project session and network access.
+A local profile or kubeconfig cannot grant access by itself.
 
 Sign in with your own project session and profile:
 

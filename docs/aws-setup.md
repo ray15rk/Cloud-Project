@@ -2,8 +2,8 @@
 
 Relay's live sandbox is the existing `cloudproject-sandbox-sydney` EKS cluster
 in project account `562358727339`, Region `ap-southeast-2`. This account uses
-AWS's new project experience. A teammate does **not** need a personal AWS
-account, Rance's access keys, or an IAM user. The project owner shares the
+AWS's new project experience. A teammate does **not** need a separate AWS
+account or IAM user. The project owner shares the
 project through AWS Settings; each teammate accepts with their own AWS Builder
 ID and creates their own local AWS CLI profile and kubeconfig.
 
@@ -37,9 +37,7 @@ tests without AWS.
 
 The project owner should send the teammate the cluster name, Region, these
 setup guides, and the [sandbox image digest](../infra/eks/README.md#sandbox-image).
-Never send a password, access keys, `.aws` directory, `.env`, or kubeconfig.
-Do not create a separate IAM user or ask the teammate to run `aws configure`
-with static access keys.
+Each person creates their own CLI profile and `.env` on their device.
 
 This cluster already has an EKS access entry for AWS's project
 `AccountFullAccessRole`, the role used in the owner's current CLI session.

@@ -67,14 +67,13 @@ Paste the generated output as `SHARED_SECRET` inside `.env`.
 
 First, have the owner [invite you to the project](docs/aws-setup.md#project-owner-invite-a-teammate)
 and accept the invitation using your own AWS Builder ID.
-Do not ask for or share Rance's AWS access keys. The sandbox image digest is
-already in the [EKS deployment notes](infra/eks/README.md#sandbox-image).
+The sandbox image digest is in the [EKS deployment notes](infra/eks/README.md#sandbox-image).
 Follow the [macOS/Linux](docs/eks-teammate-setup.md) or
 [Windows](docs/eks-teammate-setup-windows.md) guide to set your own AWS profile,
 kubeconfig path, ECR image digest, `EKS_ENABLED=true`, and `FALCO_ENABLED=true` in `.env`.
-Each teammate must generate their own kubeconfig. If an existing `.env` contains
-`/Users/rance/` or any other teammate's home directory, replace its
-`KUBECONFIG` and `AWS_PROFILE` values with your own; never share `.env` files.
+Each person generates a kubeconfig on their device and sets `KUBECONFIG` to
+that device's absolute path. Create `.env` from `env.example` locally and set
+`AWS_PROFILE` to the profile used for `aws login`.
 Use `GATEWAY_URL=http://127.0.0.1:8000/submit` for the dashboard demo; use
 port `8080` only when NGINX is running. The endpoint also needs the selected
 language runtime locally: Python, Bash (Git for Windows supplies it), or PowerShell.
