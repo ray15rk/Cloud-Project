@@ -64,8 +64,8 @@ aws login --profile cloudproject-sydney
 aws sts get-caller-identity --profile cloudproject-sydney
 ```
 
-If prompted for a Region, enter `ap-southeast-2`. In the browser, choose the
-**invited project**, not another AWS session. Confirm that the identity's
+If prompted for a Region, enter `ap-southeast-2`. If the browser displays the legacy "IAM user sign in" page, click **"Change to new experience"** in the top-right banner (or log in directly at [settings.aws.com/projects](https://settings.aws.com/projects) first) to switch to AWS Builder ID. In the browser, choose the
+**invited project** (`562358727339`), not another AWS session. Confirm that the identity's
 account is `562358727339`; the role should be the project's
 `AccountFullAccessRole` for the existing access entry. Do not continue with
 another account or role until the owner checks it. Renew an expired session

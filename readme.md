@@ -75,9 +75,12 @@ Relay runs disposable dry-run sandboxes on the Sydney EKS cluster (`cloudproject
 
 #### Step 2: Login and Generate Kubeconfig
 
+> [!NOTE]
+> **AWS Sign-in Page Note:** When your browser opens, AWS may display a legacy *"IAM user sign in"* screen. If so, click the **"Change to new experience"** button in the top-right banner (or log in directly at [settings.aws.com/projects](https://settings.aws.com/projects) first) to switch to the updated portal. This reveals the **AWS Builder ID** sign-in option. Once signed in, select Region **`ap-southeast-2`** and the invited project (`cloudproject-sandbox-sydney`, Account `562358727339`).
+
 **Windows (PowerShell):**
 ```powershell
-# 1. Login with your AWS Builder ID (browser opens; select 'ap-southeast-2' and your invited project):
+# 1. Login with your AWS Builder ID:
 aws login --profile cloudproject-sydney
 
 # 2. Generate cluster kubeconfig:

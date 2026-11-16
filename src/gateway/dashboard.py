@@ -65,7 +65,7 @@ def register_dashboard(app, gateway):
 
     health_lock = threading.Lock()
 
-    health_cache = {"checked": 0, "value": None}
+    health_cache = {"checked": 0, "value": None, "in_progress": False}
 
 
 
@@ -294,53 +294,87 @@ def register_dashboard(app, gateway):
 
     def health():
 
+        is_refresh = request.args.get("refresh") == "1"
         # Serve from cache without holding the lock during slow HTTP checks.
         with health_lock:
-            if (request.args.get("refresh") != "1"
+            if (not is_refresh
                     and time.monotonic() - health_cache["checked"] < 10
                     and health_cache["value"] is not None):
                 return jsonify(health_cache["value"])
+            if health_cache.get("in_progress") and not is_refresh and health_cache["value"] is not None:
+                return jsonify(health_cache["value"])
+            health_cache["in_progress"] = True
 
-        # Build fresh health data outside the lock so slow endpoint requests
-        # don't block other callers.
-        services = {"gateway": {"status": "online" if gateway.SHARED_SECRET else "unconfigured"}}
-
-        for key, url in (("endpoint", gateway.ENDPOINT_URL), ("central", gateway.NOTIFY_URL)):
-
+        def check_endpoint():
+            url = gateway.ENDPOINT_URL
             if not url:
-                services[key] = {"status": "unconfigured"}
-                continue
-
+                return "endpoint", {"status": "unconfigured"}
             parts = urlsplit(url)
             health_url = urlunsplit((parts.scheme, parts.netloc, "/health", "", ""))
-
             try:
                 response = requests.get(health_url, timeout=2)
                 data = response.json() if response.ok else None
-                services[key] = {"status": "online" if isinstance(data, dict) and data.get("status") == "ok" else "unavailable"}
+                status = "online" if isinstance(data, dict) and data.get("status") == "ok" else "unavailable"
+                return "endpoint", {"status": status}
             except (requests.RequestException, ValueError):
-                services[key] = {"status": "offline"}
+                return "endpoint", {"status": "offline"}
 
-        if not gateway.EKS_ENABLED:
-            services["eks"] = {"status": "disabled"}
-        else:
+        def check_central():
+            url = gateway.NOTIFY_URL
+            if not url:
+                return "central", {"status": "unconfigured"}
+            parts = urlsplit(url)
+            health_url = urlunsplit((parts.scheme, parts.netloc, "/health", "", ""))
             try:
-                services["eks"] = {"status": "online" if gateway.configured_runner().healthy() else "unavailable"}
-            except Exception:
-                services["eks"] = {"status": "unavailable"}
+                response = requests.get(health_url, timeout=2)
+                data = response.json() if response.ok else None
+                status = "online" if isinstance(data, dict) and data.get("status") == "ok" else "unavailable"
+                return "central", {"status": status}
+            except (requests.RequestException, ValueError):
+                return "central", {"status": "offline"}
 
-        if not gateway.EKS_ENABLED or not gateway.FALCO_ENABLED:
-            services["falco"] = {"status": "not_connected"}
-        else:
+        def check_cloud():
+            if not gateway.EKS_ENABLED:
+                return {"eks": {"status": "disabled"}, "falco": {"status": "not_connected"}}
             try:
-                services["falco"] = {"status": "online" if gateway.configured_runner().monitor_healthy() else "unavailable"}
+                runner = gateway.configured_runner()
+                if hasattr(runner, "check_health"):
+                    eks_ok, falco_ok = runner.check_health()
+                else:
+                    eks_ok = getattr(runner, "healthy", lambda: False)()
+                    falco_ok = getattr(runner, "monitor_healthy", lambda: None)() if gateway.FALCO_ENABLED else None
+                eks_status = "online" if eks_ok else "unavailable"
+                if not gateway.FALCO_ENABLED or falco_ok is None:
+                    falco_status = "not_connected"
+                else:
+                    falco_status = "online" if falco_ok else "unavailable"
             except Exception:
-                services["falco"] = {"status": "unavailable"}
+                eks_status = "unavailable"
+                falco_status = "unavailable" if gateway.FALCO_ENABLED else "not_connected"
+            return {"eks": {"status": eks_status}, "falco": {"status": falco_status}}
 
-        with health_lock:
-            health_cache.update(checked=time.monotonic(), value=services)
+        try:
+            services = {"gateway": {"status": "online" if gateway.SHARED_SECRET else "unconfigured"}}
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                f_endpoint = pool.submit(check_endpoint)
+                f_central = pool.submit(check_central)
+                f_cloud = pool.submit(check_cloud)
 
-        return jsonify(services)
+                k1, v1 = f_endpoint.result()
+                k2, v2 = f_central.result()
+                cloud_results = f_cloud.result()
+
+            services[k1] = v1
+            services[k2] = v2
+            services.update(cloud_results)
+
+            with health_lock:
+                health_cache.update(checked=time.monotonic(), value=services)
+
+            return jsonify(services)
+        finally:
+            with health_lock:
+                health_cache["in_progress"] = False
 
 
 

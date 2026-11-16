@@ -57,8 +57,7 @@ aws --version
 aws login --profile $Profile
 ```
 
-If prompted for a Region, enter `ap-southeast-2`. Choose the invited project
-in the browser. The profile name is local to your device. Then continue with
+If prompted for a Region, enter `ap-southeast-2`. If the browser displays a legacy "IAM user sign in" page, click **"Change to new experience"** in the top-right banner (or log in directly at [settings.aws.com/projects](https://settings.aws.com/projects) first) to reveal the AWS Builder ID sign-in option. Choose the invited project in the browser (`cloudproject-sandbox-sydney`, account `562358727339`). The profile name is local to your device. Then continue with
 that same profile:
 
 ```powershell

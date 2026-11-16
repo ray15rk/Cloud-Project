@@ -80,7 +80,8 @@ async function api(path, options = {}) {
 
   const controller = new AbortController();
 
-  const timeout = setTimeout(() => controller.abort(), 90000);
+  const timeoutMs = path.includes("/api/health") ? 30000 : 90000;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
 
@@ -100,7 +101,10 @@ async function api(path, options = {}) {
 
   } catch (error) {
 
-    if (error.name === "AbortError") throw new Error("The request is taking too long. Check activity before submitting again; execution may still be running.");
+    if (error.name === "AbortError") {
+      if (path.includes("/api/health")) throw new Error("Health check is temporarily delayed. Refreshing in background.");
+      throw new Error("The request is taking too long. Check activity before submitting again; execution may still be running.");
+    }
 
     if (error instanceof TypeError) throw new Error("Cannot reach the gateway. Check that the dashboard server is running.");
 
@@ -338,14 +342,15 @@ async function awaitCloud(attempts) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
     for (const item of attempts.filter((entry) => entry.status_code === 202)) {
-
-      const status = await api(item.response.status_url);
-
-      if (status.state === "finished" || status.state === "ambiguous" || (status.status_code && status.status_code !== 202)) {
-        item.status_code = status.status_code || 200;
-        item.response = status.response || item.response;
+      try {
+        const status = await api(item.response.status_url);
+        if (status.state === "finished" || status.state === "ambiguous" || status.state === "timed_out" || (status.status_code && status.status_code !== 202)) {
+          item.status_code = status.status_code || (status.state === "timed_out" ? 504 : 200);
+          item.response = status.response || item.response;
+        }
+      } catch (err) {
+        // Transient poll error, continue to next cycle unless deadline reached
       }
-
     }
 
   }
@@ -642,7 +647,12 @@ async function refreshHealth(force = false) {
 
     }));
 
-  } catch (error) { $("#service-list").textContent = error.message; }
+  } catch (error) {
+    toast(error.message, true);
+    if (!$("#service-list").children.length) {
+      $("#service-list").textContent = error.message;
+    }
+  }
 
   finally { $("#refresh-health .icon").classList.remove("spinning"); }
 

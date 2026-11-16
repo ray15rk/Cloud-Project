@@ -24,6 +24,8 @@ class CloudSubmissionStore:
         os.chmod(self.path, 0o600)
         db = sqlite3.connect(self.path, timeout=10)
         db.row_factory = sqlite3.Row
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("PRAGMA busy_timeout=5000")
         db.execute("PRAGMA secure_delete=ON")
         db.execute("""CREATE TABLE IF NOT EXISTS cloud_submissions (
             id TEXT PRIMARY KEY, nonce TEXT NOT NULL UNIQUE,

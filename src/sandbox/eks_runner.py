@@ -233,23 +233,37 @@ class EKSRunner:
                     if exc.status != 404:
                         LOGGER.warning("Could not delete payload ConfigMap %s: %s", configmap_name, exc)
 
-    def healthy(self) -> bool:
+    def check_health(self) -> tuple[bool, bool | None]:
+        """Check cluster health and Falco health in a single client session."""
         try:
             core, _ = self._clients()
-            self._call(core.read_namespace, NAMESPACE)
-            return True
         except Exception:
-            return False
+            return False, False if self.monitor is not None else None
+
+        try:
+            self._call(core.read_namespace, NAMESPACE)
+            eks_ok = True
+        except Exception:
+            eks_ok = False
+
+        if self.monitor is None:
+            return eks_ok, None
+
+        try:
+            falco_ok = bool(self.monitor.healthy(core, self._call))
+        except Exception:
+            falco_ok = False
+
+        return eks_ok, falco_ok
+
+    def healthy(self) -> bool:
+        eks_ok, _ = self.check_health()
+        return eks_ok
 
     def monitor_healthy(self) -> bool | None:
         """None when behaviour monitoring is off, else whether a Falco pod is running."""
-        if self.monitor is None:
-            return None
-        try:
-            core, _ = self._clients()
-            return self.monitor.healthy(core, self._call)
-        except Exception:
-            return False
+        _, falco_ok = self.check_health()
+        return falco_ok
 
 
 def configured_runner():

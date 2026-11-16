@@ -14,6 +14,8 @@ class ActivityStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         db = sqlite3.connect(self.path, timeout=10)
         db.row_factory = sqlite3.Row
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("PRAGMA busy_timeout=5000")
         db.execute("""CREATE TABLE IF NOT EXISTS activity (
             id TEXT PRIMARY KEY, name TEXT NOT NULL, scenario TEXT NOT NULL,
             created_at REAL NOT NULL, status_code INTEGER NOT NULL,
