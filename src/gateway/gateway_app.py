@@ -187,9 +187,10 @@ def submission_status(submission_id):
     row = cloud_store.get(submission_id)
     if row is None:
         return jsonify(error="Submission not found"), 404
-    if row["state"] in {"finished", "ambiguous"}:
+    if row["state"] not in {"queued", "running", "forwarding"}:
         return jsonify(submission_id=submission_id, state=row["state"],
-                       status_code=row["status_code"], response=row["response"]), 200
+                       status_code=row["status_code"] or 504,
+                       response=row["response"] or {"delivered": False, "stage": "dry_run", "reason": "submission timed out"}), 200
     return jsonify(submission_id=submission_id, state=row["state"]), 202
  
  

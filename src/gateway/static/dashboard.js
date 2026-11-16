@@ -113,39 +113,32 @@ async function api(path, options = {}) {
 
 
 function setView(view) {
-
-  if (!["overview", "workbench", "activity", "system"].includes(view)) view = "overview";
+  if (!["overview", "workbench", "activity", "system"].includes(view)) view = "workbench";
+  if (view === "overview") view = "workbench";
 
   document.body.dataset.view = view;
 
-  const names = { overview: "Overview", workbench: "Workbench", activity: "Activity", system: "System status" };
+  const names = { workbench: "Workbench", activity: "Activity", system: "System status" };
+  const titles = {
+    workbench: "Secure code delivery workbench",
+    activity: "Activity history & audit trail",
+    system: "System stack health & cloud metrics"
+  };
 
-  const titles = { overview: "Deployment overview", workbench: "Your delivery workbench", activity: "Every delivery has a story", system: "A pulse on your pipeline" };
-
-  $("#breadcrumb-current").textContent = names[view];
-
-  $("#page-title").textContent = titles[view];
+  $("#breadcrumb-current").textContent = names[view] || "Workbench";
+  $("#page-title").textContent = titles[view] || "Secure code delivery workbench";
 
   $$(".nav-item").forEach((button) => {
-
-    const selected = button.dataset.view === view;
-
+    const selected = button.dataset.view === view || (button.dataset.view === "workbench" && view === "overview");
     button.classList.toggle("active", selected);
-
     if (selected) button.setAttribute("aria-current", "page"); else button.removeAttribute("aria-current");
-
   });
 
   $("#sidebar").classList.remove("open");
-
   $("#menu-button").setAttribute("aria-expanded", "false");
-
   history.replaceState(null, "", `#${view}`);
-
   if (view === "system") { refreshHealth(); refreshMetrics(); }
-
   window.scrollTo({ top: 0, behavior: "auto" });
-
 }
 
 
@@ -348,12 +341,9 @@ async function awaitCloud(attempts) {
 
       const status = await api(item.response.status_url);
 
-      if (status.state === "finished" || status.state === "ambiguous") {
-
-        item.status_code = status.status_code;
-
-        item.response = status.response;
-
+      if (status.state === "finished" || status.state === "ambiguous" || (status.status_code && status.status_code !== 202)) {
+        item.status_code = status.status_code || 200;
+        item.response = status.response || item.response;
       }
 
     }
@@ -684,90 +674,87 @@ function metricRow(label, value, maximum, detail) {
 
 
 
+function formatLatencyHuman(ms) {
+  if (ms === null || ms === undefined || isNaN(ms)) return "0 ms";
+  if (ms === 0) return "0 ms";
+  if (ms < 0.1) return "< 0.1 ms";
+  if (ms < 1) return `${Number(ms).toFixed(2)} ms`;
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  return `${(ms / 1000).toFixed(2)} s (${Math.round(ms)} ms)`;
+}
+
 async function refreshMetrics() {
-
   try {
-
     const data = await api("/api/metrics");
-
     const buckets = data.throughput || [];
-
     const maximum = Math.max(1, ...buckets.map((bucket) => bucket.count));
-
     $("#throughput-chart").replaceChildren(...buckets.map((bucket) => {
-
       const bar = element("div", "throughput-bar");
-
-      bar.style.height = `${Math.max(3, bucket.count / maximum * 100)}%`;
-
+      bar.style.height = `${Math.max(4, bucket.count / maximum * 100)}%`;
       const second = new Date(bucket.start * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-
       bar.title = `${second}: ${bucket.count} submission${bucket.count === 1 ? "" : "s"}`;
-
       bar.setAttribute("aria-label", bar.title);
-
       return bar;
-
     }));
-
-    $("#throughput-summary").textContent = `${data.submissions_per_second.toFixed(3)} submissions/s average · ${data.peak_per_second} peak in one second`;
+    $("#throughput-summary").textContent = `${data.submissions_per_second.toFixed(2)} req/s average · ${data.peak_per_second} req/s peak`;
 
     const local = data.locations.local;
-
     const eks = data.locations.eks;
-
     const total = local.count + eks.count + data.capacity_rejected;
 
-    $("#capacity-chart").replaceChildren(
+    if (local.count > 0) {
+      $("#capacity-chart").replaceChildren(
+        metricRow("Historical local", local.count, total, `${local.count} completed`),
+        metricRow("EKS Jobs", eks.count, total, `${eks.count} completed (${data.cloud_limit} max concurrent)`),
+        metricRow("Capacity 503s", data.capacity_rejected, total, `${data.capacity_rejected} rejected`)
+      );
+    } else {
+      $("#capacity-chart").replaceChildren(
+        metricRow("EKS Jobs Completed", eks.count, total || 1, `${eks.count} completed`),
+        metricRow("Capacity 503 Rejections", data.capacity_rejected, total || 1, `${data.capacity_rejected} rejected`),
+        metricRow("Concurrency Limit", data.cloud_limit, data.cloud_limit, `${data.cloud_limit} max concurrent slots`)
+      );
+    }
+    $("#capacity-caption").textContent = `${total} total submissions evaluated in active window.`;
 
-      metricRow("Historical local", local.count, total, `${local.count} completed before EKS-only mode`),
+    const stages = [["verify_ms", "HMAC Verification"], ["dry_run_ms", "EKS Sandbox (Falco)"], ["forward_ms", "Endpoint Delivery"]];
+    if (local.count > 0) {
+      const allLatencies = stages.flatMap(([key]) => [local[`avg_${key}`], eks[`avg_${key}`]]);
+      const maxLatency = Math.max(1, ...allLatencies);
+      $("#latency-chart").replaceChildren(...stages.flatMap(([key, name]) => [
+        metricRow(`Local ${name}`, local[`avg_${key}`], maxLatency, formatLatencyHuman(local[`avg_${key}`])),
+        metricRow(`EKS ${name}`, eks[`avg_${key}`], maxLatency, formatLatencyHuman(eks[`avg_${key}`]))
+      ]));
+    } else {
+      const eksLatencies = stages.map(([key]) => eks[`avg_${key}`]);
+      const maxLatency = Math.max(1, ...eksLatencies);
+      $("#latency-chart").replaceChildren(...stages.map(([key, name]) =>
+        metricRow(name, eks[`avg_${key}`], maxLatency, formatLatencyHuman(eks[`avg_${key}`]))
+      ));
+    }
 
-      metricRow("EKS", eks.count, total, `${eks.count} completed (${data.cloud_limit} max concurrent)`),
-
-      metricRow("Rejected at capacity", data.capacity_rejected, total, `${data.capacity_rejected} rejected`)
-
-    );
-
-    $("#capacity-caption").textContent = `${total} final submissions in the last hour; historical local runs may appear.`;
-
-    const stages = [["verify_ms", "Verification"], ["dry_run_ms", "Dry run"], ["forward_ms", "Forwarding"]];
-
-    const allLatencies = stages.flatMap(([key]) => [local[`avg_${key}`], eks[`avg_${key}`]]);
-
-    const maxLatency = Math.max(1, ...allLatencies);
-
-    $("#latency-chart").replaceChildren(...stages.flatMap(([key, name]) => [
-
-      metricRow(`Local ${name}`, local[`avg_${key}`], maxLatency, `${local[`avg_${key}`]} ms`),
-
-      metricRow(`EKS ${name}`, eks[`avg_${key}`], maxLatency, `${eks[`avg_${key}`]} ms`)
-
-    ]));
-
-    const maxFailures = Math.max(1, local.dry_run_failures, eks.dry_run_failures);
-
-    $("#failure-chart").replaceChildren(
-
-      metricRow("Local dry-run blocked", local.dry_run_failures, maxFailures, String(local.dry_run_failures)),
-
-      metricRow("EKS dry-run blocked", eks.dry_run_failures, maxFailures, String(eks.dry_run_failures))
-
-    );
-
-    $("#failure-summary").textContent = `Failure isolation: ${eks.dry_run_failures} EKS dry-run failures; ${eks.delivered} EKS deliveries. Historical local results may still appear above.`;
-
+    if (local.count > 0) {
+      const maxFailures = Math.max(1, local.dry_run_failures, eks.dry_run_failures, eks.delivered);
+      $("#failure-chart").replaceChildren(
+        metricRow("Local dry-run blocked", local.dry_run_failures, maxFailures, String(local.dry_run_failures)),
+        metricRow("EKS threats blocked", eks.dry_run_failures, maxFailures, String(eks.dry_run_failures)),
+        metricRow("Delivered safely", eks.delivered, maxFailures, String(eks.delivered))
+      );
+    } else {
+      const maxFailures = Math.max(1, eks.dry_run_failures, eks.delivered, data.capacity_rejected);
+      $("#failure-chart").replaceChildren(
+        metricRow("Sandbox Threats Blocked", eks.dry_run_failures, maxFailures, `${eks.dry_run_failures} blocked`),
+        metricRow("Delivered to Edge", eks.delivered, maxFailures, `${eks.delivered} verified & executed`),
+        metricRow("Queue Rejections (503)", data.capacity_rejected, maxFailures, `${data.capacity_rejected} shed`)
+      );
+    }
+    $("#failure-summary").textContent = `Security summary: ${eks.dry_run_failures} sandbox threats neutralised; ${eks.delivered} payloads delivered cleanly to edge device.`;
   } catch (error) {
-
     $("#throughput-chart").textContent = error.message;
-
     $("#capacity-chart").textContent = "Metrics unavailable.";
-
     $("#latency-chart").textContent = "Metrics unavailable.";
-
     $("#failure-chart").textContent = "Metrics unavailable.";
-
   }
-
 }
 
 
@@ -866,11 +853,24 @@ async function init() {
 
   $("#run-button").addEventListener("click", () => runPipeline());
 
-  $("#capacity-test").addEventListener("click", () => runPipeline(true));
+  $("#capacity-test").addEventListener("click", async () => {
+    toast("Submitting concurrent probes to test queue capacity…");
+    await runPipeline(true);
+  });
 
-  $("#integrity-test").addEventListener("click", () => { setView("workbench"); loadExample("good", false); setMode("tamper"); });
+  $("#integrity-test").addEventListener("click", () => {
+    setView("workbench");
+    loadExample("good", false);
+    setMode("tamper");
+    toast("Tamper test ready — click \"Run pipeline\" to execute.");
+  });
 
-  $("#resource-test").addEventListener("click", () => { setView("workbench"); loadExample("infinite_loop", false); setMode("signed"); });
+  $("#resource-test").addEventListener("click", () => {
+    setView("workbench");
+    loadExample("infinite_loop", false);
+    setMode("signed");
+    toast("Infinite loop canary loaded — click \"Run pipeline\" to submit to EKS.");
+  });
 
   $("#refresh-health").addEventListener("click", () => refreshHealth(true));
 

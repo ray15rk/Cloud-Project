@@ -294,63 +294,53 @@ def register_dashboard(app, gateway):
 
     def health():
 
+        # Serve from cache without holding the lock during slow HTTP checks.
         with health_lock:
-
             if (request.args.get("refresh") != "1"
-
-                    and time.monotonic() - health_cache["checked"] < 10 and health_cache["value"] is not None):
-
+                    and time.monotonic() - health_cache["checked"] < 10
+                    and health_cache["value"] is not None):
                 return jsonify(health_cache["value"])
 
-            services = {"gateway": {"status": "online" if gateway.SHARED_SECRET else "unconfigured"}}
+        # Build fresh health data outside the lock so slow endpoint requests
+        # don't block other callers.
+        services = {"gateway": {"status": "online" if gateway.SHARED_SECRET else "unconfigured"}}
 
-            for key, url in (("endpoint", gateway.ENDPOINT_URL), ("central", gateway.NOTIFY_URL)):
+        for key, url in (("endpoint", gateway.ENDPOINT_URL), ("central", gateway.NOTIFY_URL)):
 
-                if not url:
+            if not url:
+                services[key] = {"status": "unconfigured"}
+                continue
 
-                    services[key] = {"status": "unconfigured"}
+            parts = urlsplit(url)
+            health_url = urlunsplit((parts.scheme, parts.netloc, "/health", "", ""))
 
-                    continue
+            try:
+                response = requests.get(health_url, timeout=2)
+                data = response.json() if response.ok else None
+                services[key] = {"status": "online" if isinstance(data, dict) and data.get("status") == "ok" else "unavailable"}
+            except (requests.RequestException, ValueError):
+                services[key] = {"status": "offline"}
 
-                parts = urlsplit(url)
+        if not gateway.EKS_ENABLED:
+            services["eks"] = {"status": "disabled"}
+        else:
+            try:
+                services["eks"] = {"status": "online" if gateway.configured_runner().healthy() else "unavailable"}
+            except Exception:
+                services["eks"] = {"status": "unavailable"}
 
-                health_url = urlunsplit((parts.scheme, parts.netloc, "/health", "", ""))
+        if not gateway.EKS_ENABLED or not gateway.FALCO_ENABLED:
+            services["falco"] = {"status": "not_connected"}
+        else:
+            try:
+                services["falco"] = {"status": "online" if gateway.configured_runner().monitor_healthy() else "unavailable"}
+            except Exception:
+                services["falco"] = {"status": "unavailable"}
 
-                try:
-
-                    response = requests.get(health_url, timeout=1)
-
-                    data = response.json() if response.ok else None
-
-                    services[key] = {"status": "online" if isinstance(data, dict) and data.get("status") == "ok" else "unavailable"}
-
-                except (requests.RequestException, ValueError):
-
-                    services[key] = {"status": "offline"}
-
-            if not gateway.EKS_ENABLED:
-
-                services["eks"] = {"status": "disabled"}
-
-            else:
-
-                try:
-
-                    services["eks"] = {"status": "online" if gateway.configured_runner().healthy() else "unavailable"}
-
-                except Exception:
-
-                    services["eks"] = {"status": "unavailable"}
-            if not gateway.EKS_ENABLED or not gateway.FALCO_ENABLED:
-                services["falco"] = {"status": "not_connected"}
-            else:
-                try:
-                    services["falco"] = {"status": "online" if gateway.configured_runner().monitor_healthy() else "unavailable"}
-                except Exception:
-                    services["falco"] = {"status": "unavailable"}
+        with health_lock:
             health_cache.update(checked=time.monotonic(), value=services)
 
-            return jsonify(services)
+        return jsonify(services)
 
 
 

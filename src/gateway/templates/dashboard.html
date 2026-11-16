@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="{{ url_for('dashboard.static', filename='dashboard.css') }}">
   <script src="{{ url_for('dashboard.static', filename='dashboard.js') }}" defer></script>
 </head>
-<body data-view="overview">
+<body data-view="workbench">
 <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
  <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 6-6 6 6 6m8-12 6 6-6 6m-3-15-2 18"/></symbol>
@@ -34,8 +34,7 @@
   <a href="#overview" class="brand" aria-label="Relay home"><span class="brand-mark">r<span>↗</span></span><span>relay<span class="brand-dot">.</span></span></a>
   <div class="workspace-label">WORKSPACE <span>01</span></div>
   <nav aria-label="Main navigation">
-    <button class="nav-item active" data-view="overview" aria-current="page"><svg class="icon"><use href="#i-grid"/></svg>Overview</button>
-    <button class="nav-item" data-view="workbench"><svg class="icon"><use href="#i-code"/></svg>Workbench<span class="nav-key">⌘</span></button>
+    <button class="nav-item active" data-view="workbench" aria-current="page"><svg class="icon"><use href="#i-code"/></svg>Workbench<span class="nav-key">⌘</span></button>
     <button class="nav-item" data-view="activity"><svg class="icon"><use href="#i-activity"/></svg>Activity<span class="nav-count" id="activity-count">0</span></button>
     <button class="nav-item" data-view="system"><svg class="icon"><use href="#i-server"/></svg>System status</button>
   </nav>
@@ -95,6 +94,53 @@ Good code starts with a trusted source.</pre></div>
       </article>
     </section>
 
+    <section class="card guide-card composer-section" aria-label="Pipeline defense checks">
+      <div class="card-heading">
+        <div>
+          <div class="card-kicker">AUTOMATED DEFENSE SCENARIOS</div>
+          <h2>Live pipeline checks</h2>
+        </div>
+        <span class="badge success">Interactive tests</span>
+      </div>
+      <div class="test-grid">
+        <div class="test-card">
+          <div class="test-card-top">
+            <span class="test-step">STAGE 01</span>
+            <span class="test-badge integrity"><svg class="icon"><use href="#i-shield"/></svg> HMAC-SHA256</span>
+          </div>
+          <h3>Signature Tamper Test</h3>
+          <p>Mutates payload bits in transit to verify that forged or tampered code is rejected with <code>HTTP 401</code> before ever touching the sandbox.</p>
+          <div class="test-action">
+            <button class="button secondary small" id="integrity-test"><svg class="icon"><use href="#i-shield"/></svg><span>Run Tamper Test</span></button>
+          </div>
+        </div>
+
+        <div class="test-card">
+          <div class="test-card-top">
+            <span class="test-step">STAGE 03</span>
+            <span class="test-badge sandbox"><svg class="icon"><use href="#i-code"/></svg> 128 MB · 10s Cap</span>
+          </div>
+          <h3>Sandbox Resource Isolation</h3>
+          <p>Loads a CPU-bound infinite loop script into the editor to verify that runaway code is terminated at its 10-second deadline without reaching edge devices.</p>
+          <div class="test-action">
+            <button class="button secondary small" id="resource-test"><svg class="icon"><use href="#i-code"/></svg><span>Run Loop Canary</span></button>
+          </div>
+        </div>
+
+        <div class="test-card highlight">
+          <div class="test-card-top">
+            <span class="test-step">STAGE 02</span>
+            <span class="test-badge capacity"><svg class="icon"><use href="#i-server"/></svg> Concurrency Cap</span>
+          </div>
+          <h3>Queue Admission Burst Test</h3>
+          <p>Fires 4 concurrent dry-run probes in parallel to verify that requests exceeding the cloud queue limit fail closed with <code>HTTP 503</code>.</p>
+          <div class="test-action">
+            <button class="button primary small" id="capacity-test"><svg class="icon"><use href="#i-arrow"/></svg><span>Run Queue Test</span></button>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section class="card activity-section" aria-label="Submission history">
       <div class="activity-heading"><div><div class="card-kicker">EVERY HANDOFF, ACCOUNTED FOR</div><h2>Recent activity <span class="count-pill" id="history-count">0</span></h2></div><button class="button secondary small" id="export-button"><svg class="icon"><use href="#i-download"/></svg>Export CSV</button></div>
       <div class="activity-tools"><div class="filter-group" role="group" aria-label="Filter activity"><button class="filter-option selected" data-filter="all" aria-pressed="true">All submissions</button><button class="filter-option" data-filter="delivered" aria-pressed="false">Delivered</button><button class="filter-option" data-filter="blocked" aria-pressed="false">Blocked / failed</button></div><label class="search-wrap"><svg class="icon"><use href="#i-search"/></svg><input id="activity-search" type="search" placeholder="Search payloads…" aria-label="Search activity"></label></div>
@@ -104,9 +150,61 @@ Good code starts with a trusted source.</pre></div>
     </section>
 
     <section class="system-section" aria-label="System configuration">
-      <div class="system-grid"><article class="card"><div class="card-heading"><div><div class="card-kicker">YOUR LOCAL STACK</div><h2>Service health</h2></div><button class="icon-button" id="refresh-health" aria-label="Refresh service health"><svg class="icon"><use href="#i-refresh"/></svg></button></div><div id="service-list" class="service-list"><p>Checking services…</p></div></article><article class="card cloud-card"><span class="cloud-symbol"><svg class="icon"><use href="#i-cloud"/></svg></span><span class="badge amber">Not connected</span><h2>AWS EKS</h2><p>EKS dry-run status is being checked.</p><div class="cloud-note">Verified submissions require EKS.</div></article></div>
-      <article class="card metrics-card" aria-label="Cloud transition metrics"><div class="card-heading"><div><div class="card-kicker">RECENT OBSERVED RESULTS</div><h2>Cloud transition metrics</h2></div><span class="badge neutral">Last hour</span></div><p class="metrics-intro">Charts use completed submissions in the activity journal. The submission-rate chart shows the last 60 seconds.</p><div class="metrics-grid"><div><h3>Submissions per second</h3><div id="throughput-chart" class="throughput-chart" role="img" aria-label="Submissions per second over the last minute">Loading…</div><p id="throughput-summary" class="metrics-caption"></p></div><div><h3>Capacity split</h3><div id="capacity-chart" class="metric-bars">Loading…</div><p id="capacity-caption" class="metrics-caption"></p></div><div><h3>Average stage latency</h3><div id="latency-chart" class="metric-bars">Loading…</div><p class="metrics-caption">Verified, dry run, and forwarding stages; milliseconds per completed run with a recorded stage.</p></div><div><h3>Failure isolation</h3><div id="failure-chart" class="metric-bars">Loading…</div></div></div><p id="failure-summary" class="metrics-summary"></p></article>
-      <article class="card guide-card"><div class="card-heading"><div><div class="card-kicker">PUT THE GUARDRAILS TO WORK</div><h2>Pipeline checks</h2></div><span class="badge neutral">Live tests</span></div><div class="test-grid"><div><span class="test-number">01</span><h3>Integrity &amp; replay</h3><p>Use Tamper test to invalidate a signature, or Replay test to send the same signed request twice.</p><button class="text-button" id="integrity-test">Try in workbench <span>↗</span></button></div><div><span class="test-number">02</span><h3>Resource isolation</h3><p>Load the infinite loop or memory exhaustion sample. The EKS dry run should block endpoint delivery.</p><button class="text-button" id="resource-test">Load infinite loop <span>↗</span></button></div><div><span class="test-number">03</span><h3>EKS queue admission</h3><p>Submit concurrent probes to exercise the EKS queue limit. Results appear in activity history.</p><button class="text-button" id="capacity-test">Run queue test <span>↗</span></button></div></div></article>
+      <div class="system-grid">
+        <article class="card">
+          <div class="card-heading"><div><div class="card-kicker">LOCAL PERIMETER</div><h2>Service health</h2></div><button class="icon-button" id="refresh-health" aria-label="Refresh service health"><svg class="icon"><use href="#i-refresh"/></svg></button></div>
+          <div id="service-list" class="service-list"><p>Checking services…</p></div>
+        </article>
+        <article class="card cloud-card">
+          <span class="cloud-symbol"><svg class="icon"><use href="#i-cloud"/></svg></span>
+          <span class="badge amber">Not connected</span>
+          <h2>AWS EKS Cluster</h2>
+          <p>Disposable Job sandboxing running under AWS Builder ID in <code>ap-southeast-2</code>.</p>
+          <div class="cloud-note"><span class="tiny-dot"></span> Verified dry runs require live EKS connectivity.</div>
+        </article>
+      </div>
+
+      <article class="card metrics-card" aria-label="Cloud transition metrics">
+        <div class="card-heading">
+          <div><div class="card-kicker">OBSERVED TELEMETRY</div><h2>Cluster performance &amp; transition metrics</h2></div>
+          <span class="badge neutral">Active session</span>
+        </div>
+        <p class="metrics-intro">Live metrics from completed submissions in the local activity store and EKS dry-run queue.</p>
+        <div class="metrics-grid">
+          <div class="metric-card-tile">
+            <div class="metric-tile-header">
+              <h3>Submission throughput</h3>
+              <span class="metric-badge-small">60s Window</span>
+            </div>
+            <div id="throughput-chart" class="throughput-chart" role="img" aria-label="Submissions per second over the last minute">Loading…</div>
+            <p id="throughput-summary" class="metrics-caption"></p>
+          </div>
+          <div class="metric-card-tile">
+            <div class="metric-tile-header">
+              <h3>Queue capacity &amp; admission</h3>
+              <span class="metric-badge-small">Max 3 concurrent</span>
+            </div>
+            <div id="capacity-chart" class="metric-bars">Loading…</div>
+            <p id="capacity-caption" class="metrics-caption"></p>
+          </div>
+          <div class="metric-card-tile">
+            <div class="metric-tile-header">
+              <h3>Stage execution latency</h3>
+              <span class="metric-badge-small">Average time</span>
+            </div>
+            <div id="latency-chart" class="metric-bars">Loading…</div>
+            <p class="metrics-caption">Verified HMAC, EKS dry run (including Falco settle window), and endpoint forwarding latency.</p>
+          </div>
+          <div class="metric-card-tile">
+            <div class="metric-tile-header">
+              <h3>Security threat isolation</h3>
+              <span class="metric-badge-small">Verdicts</span>
+            </div>
+            <div id="failure-chart" class="metric-bars">Loading…</div>
+            <p id="failure-summary" class="metrics-summary"></p>
+          </div>
+        </div>
+      </article>
     </section>
     <footer class="page-footer"><span><span class="footer-mark">r↗</span> A little more trust in every delivery.</span><span>Group 22 <span>·</span> Cloud &amp; Distributed Computing</span></footer>
   </main>

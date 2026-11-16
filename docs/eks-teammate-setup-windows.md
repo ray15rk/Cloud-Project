@@ -79,9 +79,14 @@ query succeeds. If `aws sts` fails, check your invitation, selected project,
 and login. If `describe-cluster` is denied, ask the owner to check EKS
 permissions. If `kubectl` says Forbidden or Unauthorized, ask the owner to
 check the actual role, existing EKS access entry, and Kubernetes permissions.
-If `kubectl` times out, ask the operator to compare your current public IP
-with the cluster API allowlist; a temporary `/32` entry can be removed after
-testing. Never share credentials or commit your IP.
+If `kubectl` times out (`i/o timeout` on port 443), your current public IP is not in the cluster's allowed CIDR list. Check your IP and append it dynamically using your assumed role:
+```powershell
+$myIp = (Invoke-WebRequest -Uri "https://checkip.amazonaws.com").Content.Trim()
+$current = (aws eks describe-cluster --name cloudproject-sandbox-sydney --profile cloudproject-sydney --query "cluster.resourcesVpcConfig.publicAccessCidrs" --output text) -split "`t"
+$updated = ($current + "$myIp/32" | Select-Object -Unique) -join ","
+aws eks update-cluster-config --name cloudproject-sandbox-sydney --resources-vpc-config publicAccessCidrs="$updated" --profile cloudproject-sydney
+```
+Wait for the update to complete (`aws eks describe-update ...`), then retry `kubectl`. Never share credentials or commit personal IP addresses.
 
 Check the Falco Pod before enabling `FALCO_ENABLED=true`:
 
