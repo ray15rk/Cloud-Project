@@ -1,4 +1,9 @@
-# Nginx limits and local evaluation
+# Historical Nginx limits and local evaluation
+
+This document records the October Docker-based synchronous implementation.
+Its four-slot capacity and latency results do not describe the current EKS queue.
+Do not run `scripts.check_stack` or `scripts.check_nginx` as current acceptance
+tests; use the [demo runbook](demo-runbook.md) for the current request path.
 
 ## Chosen settings
 

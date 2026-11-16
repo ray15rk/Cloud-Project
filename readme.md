@@ -2,11 +2,19 @@
 
 A multi-tier, defense-in-depth distributed framework for safely pushing and executing untrusted mobile code on edge devices. Supports polyglot payloads (**Python**, **Bash / Shell scripts**, and **PowerShell**). Payloads undergo constant-time HMAC-SHA256 verification, EKS dry-run sandboxing, and delivery to target endpoints only after passing all checks.
 
+**New teammate?** You do not need to create an AWS account. You can install
+the project and run the [automated tests](#51-pytest-test-suite) on your device
+without AWS. To submit a real dry run or demo the dashboard, the project
+owner must first [invite you to the AWS project](docs/aws-setup.md). AWS grants
+invited teammates broad access to that project's resources. There is no local Docker fallback
+for gateway dry runs.
+
 ---
 
 ## 1. Prerequisites & Initial Setup (Do This First!)
 
-Before running the web dashboard or testing payloads, complete these one-time setup steps.
+Before submitting payloads through the dashboard, complete these one-time
+setup steps. The automated tests in section 5.1 can run without AWS access.
 
 > [!IMPORTANT]
 > **EKS access and the sandbox image digest must be configured before testing payloads through the gateway.** When EKS is disabled, the gateway fails closed with HTTP 503.
@@ -15,7 +23,7 @@ Run all commands from the repository root directory.
 
 ### 1.1 Install System Dependencies
 * **Python 3.11+**
-* **AWS CLI v2 and kubectl** for access to the existing EKS cluster; see the [EKS setup guides](#6-aws-eks-setup-and-execution)
+* **AWS CLI v2.32.0 or newer and kubectl** for live access to the existing EKS cluster; see the [EKS setup guides](#6-aws-eks-setup-and-execution)
 * **NGINX** *(optional for local dashboard, required for production perimeter benchmark)*:
   * **Windows:** Download stable `.zip` from [nginx.org](https://nginx.org) and extract to `C:\nginx`.
   * **macOS:** `brew install nginx`
@@ -30,7 +38,6 @@ python3 -m venv .venv
 source .venv/bin/activate
 
 # Windows (PowerShell)
-Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -46,11 +53,11 @@ Copy the template and generate a cryptographic signing secret:
 
 ```bash
 # macOS / Linux
-cp env.example .env
+test -f .env || cp env.example .env
 python3 -c "import secrets; print(secrets.token_hex(32))"
 
 # Windows (PowerShell)
-Copy-Item env.example .env
+if (-not (Test-Path .env)) { Copy-Item env.example .env }
 python -c "import secrets; print(secrets.token_hex(32))"
 ```
 Paste the generated output as `SHARED_SECRET` inside `.env`.  
@@ -58,9 +65,20 @@ Paste the generated output as `SHARED_SECRET` inside `.env`.
 
 ### 1.4 Configure EKS
 
+First, have the owner [invite you to the project](docs/aws-setup.md#project-owner-invite-a-teammate)
+and accept the invitation using your own AWS Builder ID.
+Do not ask for or share Rance's AWS access keys. The sandbox image digest is
+already in the [EKS deployment notes](infra/eks/README.md#sandbox-image).
 Follow the [macOS/Linux](docs/eks-teammate-setup.md) or
 [Windows](docs/eks-teammate-setup-windows.md) guide to set your own AWS profile,
-kubeconfig path, ECR image digest, and `EKS_ENABLED=true` in `.env`.
+kubeconfig path, ECR image digest, `EKS_ENABLED=true`, and `FALCO_ENABLED=true` in `.env`.
+Each teammate must generate their own kubeconfig. If an existing `.env` contains
+`/Users/rance/` or any other teammate's home directory, replace its
+`KUBECONFIG` and `AWS_PROFILE` values with your own; never share `.env` files.
+Use `GATEWAY_URL=http://127.0.0.1:8000/submit` for the dashboard demo; use
+port `8080` only when NGINX is running. The endpoint also needs the selected
+language runtime locally: Python, Bash (Git for Windows supplies it), or PowerShell.
+PowerShell currently triggers Falco startup findings and is not a clean demo case.
 
 ---
 
@@ -92,7 +110,7 @@ Open **`http://127.0.0.1:8000`** in your browser.
 1. **Load Sample Scripts:** Use the **Load sample** dropdown to select presets across all 3 languages:
    * **Python:** `good.py` (Healthy), `infinite_loop.py` (Timeout), `memory_hog.py` (OOM kill).
    * **Bash:** `good.sh` (Healthy diagnostic), `infinite_loop.sh` (Timeout), `memory_hog.sh` (OOM kill).
-   * **PowerShell:** `good.ps1` (Healthy admin task).
+   * **PowerShell:** `good.ps1` (currently blocked by Falco startup findings).
    *(Notice that the language badge in the top right automatically updates to **Python 3.11**, **Bash**, or **PowerShell**).*
 2. **Upload Your Own Scripts:** Click **Upload script** or drag-and-drop any `.py`, `.sh`, or `.ps1` file into the editor.
 3. **Select a Submission Mode:**
@@ -115,38 +133,42 @@ Relay supports heterogeneous edge workloads: **Bash / Shell scripts (`.sh`)** fo
 | :--- | :--- | :--- | :--- | :--- |
 | **Python** | `python` | `.py` | `python3 -I -B -u /sandbox/script.py` | Telemetry processing, data aggregation, automation |
 | **Bash / Shell** | `bash` | `.sh` | `bash /sandbox/script.sh` | OS diagnostics, kernel probing, daemon health checks |
-| **PowerShell** | `powershell` | `.ps1` | `pwsh -NoProfile -Command ...` | Heterogeneous Windows/Linux administration tasks |
+| **PowerShell** | `powershell` | `.ps1` | `pwsh -NoProfile -File /sandbox/script.ps1` | Heterogeneous Windows/Linux administration tasks |
 
 ### 3.2 Symmetrical Test Cases (`src/examples/`)
 
-Both Python and Bash have direct, symmetrical test cases:
+Accepted submissions first return HTTP 202. The sender polls the status URL.
+The completed status endpoint returns HTTP 200 with the final outcome in its
+`status_code` field (200, 422, or 503); the CLI prints that outcome as “final”.
 
-| Test Scenario | Python Script | Bash Script (`.sh`) | Expected Gateway Response |
-| :--- | :--- | :--- | :--- |
-| **Golden Path** | `good.py` | `good.sh` | `HTTP 200 OK` (executed on endpoint) |
-| **CPU Infinite Loop** | `infinite_loop.py` | `infinite_loop.sh` | `HTTP 422` (`reason: timeout` at 10s deadline) |
-| **Memory Exhaustion (OOM)** | `memory_hog.py` | `memory_hog.sh` | `HTTP 422` (`reason: oom_killed` at 128 MB cap) |
-| **Network Breach Probe** | — | `network_breach.sh` | Dropped / exit error (`--network none`) |
-| **Filesystem Breakout Probe** | — | `filesystem_breakout.sh` | Dropped / read-only error (`--read-only`) |
-| **PowerShell Golden Path** | — | `good.ps1` | `HTTP 200 OK` (executed on endpoint) |
+| Scenario | Example | Expected final outcome |
+| --- | --- | --- |
+| Clean Python or Bash | `good.py`, `good.sh` | 200, delivered after a clean Falco verdict |
+| Infinite loop | `infinite_loop.py`, `infinite_loop.sh` | 422, timeout or a Falco finding |
+| Memory exhaustion | `memory_hog.py`, `memory_hog.sh` | 422, memory failure or a Falco finding |
+| Network attempt that catches its error | `network_swallowed.py` | 422, Falco network finding, no delivery |
+| File write attempt | `fs_write_swallowed.py` | 422, Falco filesystem finding, no delivery |
+| PowerShell startup | `good.ps1` | Currently blocked by runtime-generated Falco findings |
 
-The PowerShell result above applies to the local sandbox path. In cloud-first mode, the current
-Falco policy blocks even a harmless PowerShell run because its runtime generates file and network
-events. Python and Bash have passed the cloud-first live path; see the [Falco setup guide](docs/falco-setup.md).
+These are expected outcomes; see [recorded verification and limits](docs/project-review-2026-11-12.md).
+A monitoring failure can instead produce 503. Falco findings take precedence over
+script exit status. Upload the Python canaries through the dashboard or use the CLI.
 
-### 3.3 Security Boundary & Adversarial Matrix
+### 3.3 EKS isolation and limits
 
-The disposable sandbox enforces strict multi-layered isolation parameters. The following boundaries have been validated with real adversarial code:
+The [Job template](infra/k8s/sandbox-job.yaml.template) specifies 128 MiB memory,
+500 mCPU, UID 65534, a read-only root filesystem, no privilege escalation,
+dropped capabilities, RuntimeDefault seccomp, no service-account token, and a
+16 MiB memory-backed `/tmp`. The runner imposes a 10-second script deadline;
+the Job has a separate 300-second overall deadline. Namespace network policy
+blocks sandbox network traffic when enforced by the cluster CNI.
 
-| Injected Adversarial Attack | Runtime Tested | Enforced Sandbox Flag | Observed System Response | Security Result |
-| :--- | :--- | :--- | :--- | :--- |
-| **Memory Ballooning (OOM)** | Python / Bash | `--memory=128m` | Host kernel OOM killer terminates container; Gateway returns `HTTP 422 oom_killed` | **PASS**: Host RAM protected |
-| **CPU Infinite Loop** | Python / Bash | Subprocess `timeout=10` | Container receives `SIGKILL` at 10.0s deadline; Gateway returns `HTTP 422 timeout` | **PASS**: No worker starvation |
-| **Outbound Network Breach** | Bash (`curl -I google.com`) | `--network none` | Zero sockets allocated; command fails immediately with exit error | **PASS**: Zero C2 / exfiltration |
-| **Filesystem Breakout** | Bash (`echo > /sandbox/hacked.txt`) | `--read-only` | Linux VFS kernel hard-blocks disk write with Read-Only File System error | **PASS**: Host disk immutable |
-| **Process Exhaustion (Fork Bomb)** | Python (`multiprocessing`) | `--pids-limit 64` | Linux kernel refuses to allocate 65th process; execution throttled and capped | **PASS**: PID table intact |
-| **State Contamination (Write)** | Bash (`echo data > /tmp/ghost.txt`) | `--tmpfs /tmp` | Write isolated inside ephemeral RAM tmpfs of that container invocation | **PASS**: Isolated session |
-| **State Contamination (Read)** | Bash (`cat /tmp/ghost.txt`) | `--rm` + tmpfs cleanup | Container is destroyed post-run; 2nd request sees `File not found` | **PASS**: Zero state leakage |
+The old Docker helper's `--pids-limit 64` is not an EKS Job setting. Do not claim
+an equivalent EKS PID limit without checking the worker configuration. Falco
+observes a run and can block later delivery; it does not stop a running script.
+A clean dry run does not prove safe behavior on a different host. The local
+endpoint executes in its host runtime and has no gateway authentication of its
+own, so keep it on loopback. This is a demonstration, not a production deployment.
 
 ---
 
@@ -167,7 +189,7 @@ Activate the virtual environment in each terminal, then run:
 | :--- | :--- | :--- | :--- |
 | **1** | Central Monitor | `python -m src.sender.central_server` | Listens for failure reports on `:9000` |
 | **2** | Endpoint Device | `python -m src.endpoint.endpoint_app` | Downstream execution host on `:5000` |
-| **3** | Production Gateway | `python -m src.gateway.serve` | Waitress WSGI (1 process, 8 threads, 4 slots) on `:8000` |
+| **3** | Production Gateway | `python -m src.gateway.serve` | Waitress WSGI (1 process, 8 HTTP threads; default 2 EKS workers, 3 outstanding submissions) on `:8000` |
 | **4** | NGINX Proxy | *(See commands below)* | Perimeter rate/conn proxy on `:8080` |
 
 #### Starting NGINX:
@@ -204,7 +226,7 @@ python -m src.sender.send src/examples/good.py
 # 2. Golden Path (Bash): Automatically infers .sh as Bash (HTTP 200)
 python -m src.sender.send src/examples/good.sh
 
-# 3. Golden Path (PowerShell): Automatically infers .ps1 as PowerShell (HTTP 200)
+# 3. PowerShell: currently blocked by Falco runtime findings
 python -m src.sender.send src/examples/good.ps1
 
 # 4. Tampered Payload: Dropped at Stage 1 verify (HTTP 401; alerts Terminal 1)
@@ -234,37 +256,19 @@ Kubernetes log tests start loopback servers, which may be blocked in restricted
 environments.
 
 ```bash
-# Run the complete test suite
+# Complete suite: first start Docker and build the legacy test image
+docker build -t cloudproject-sandbox:dev docker/sandbox
 python -m pytest src/tests -v -p no:cacheprovider
 
 # Run tests without Docker (skips live Docker dry-run tests)
 python -m pytest src/tests -v -m "not docker" -p no:cacheprovider
 ```
 
-#### Test Suite Breakdown (160 tests total):
-
-| Module | Tests | What it covers |
-| :--- | :--- | :--- |
-| `test_watchdog` | 11 | HMAC integrity, freshness, replay prevention, language binding |
-| `test_gateway` | 10 | Full pipeline: verify → EKS → Falco → deliver; fail-closed cases |
-| `test_falco_monitor` | 34 | Falco alert parsing, fail-closed logic, verdict mapping |
-| `test_falco_runner` | 12 | EKS runner + Falco integration end-to-end (mocked k8s) |
-| `test_falco_rules` | 15 | Rule YAML structure and behaviour class coverage |
-| `test_falco_real_client` | 8 | Live Falco API client (requires cluster access) |
-| `test_kube_logs` | 10 | Kubernetes log reader correctness |
-| `test_dashboard` | 13 | UI signing, CSRF token, capacity recording, adversarial payloads |
-| `test_cloud_submissions` | 4 | SQLite queue, in-flight cap, lease recovery |
-| `test_eks_runner_manifest` | 4 | Job YAML hardening (seccomp, uid, read-only, no SA token) |
-| `test_nginx_conf` | 7 | Path whitelist, rate limit code, body cap, timeout, no-retry |
-| `test_resource_manager` | 4 | Atomic admission, concurrency, memory tracking |
-| `test_sandbox` | 9 | Local Docker sandbox (6 require Docker Desktop — expected to fail without it) |
-| `test_sandbox_job_template` | 3 | Job template YAML validity |
-| `test_serve` | 6 | Thread/slot config enforcement |
-| `test_ingress` | 6 | Monitor aggregation, retry, log rotation |
-| `test_endpoint` | 3 | UTF-8 output, failure cleanup |
-| `test_no_conflict_markers` | 1 | No unresolved git merge artifacts |
-
-**Expected result:** 154 passed, 6 failed (`test_sandbox.py` — Docker daemon required).
+The current suite contains 160 collected tests. With Docker running, all 160
+should pass. Without Docker, run the
+`not docker` command above; it runs 151 tests and skips nine legacy Docker-marked tests. The Falco
+client and Kubernetes log tests use local test servers, not a live EKS cluster.
+For the last live EKS check, see the [review record](docs/project-review-2026-11-12.md).
 
 ---
 
@@ -276,7 +280,7 @@ After following the EKS setup guide, submit a clean example:
 python -m src.sender.send src/examples/good.py
 ```
 
-The sender polls the EKS Job and reports the final result. For Falco canaries,
+The sender polls the gateway status URL and reports the final result. For Falco canaries,
 use `python -m scripts.check_falco` with an authorized cluster identity.
 
 ---
@@ -304,8 +308,7 @@ initially return **HTTP 202** with a `status_url`; the sender polls until the
 Job completes. Cluster Autoscaler changes worker node capacity independently.
 With `EKS_ENABLED=false`, the gateway rejects dry-run submissions with HTTP 503.
 
-For cloud setup details, see:
-* [AWS EKS Deployment Notes](infra/eks/README.md)
+For cloud setup details, see [AWS EKS Deployment Notes](infra/eks/README.md).
 
 ---
 
@@ -330,7 +333,7 @@ python -m src.sender.send src/examples/network_swallowed.py   # exits 0 itself, 
 
 Install steps, the rule table, tuning, troubleshooting and limits: [Falco setup guide](docs/falco-setup.md).
 Rules and policy lists: [`infra/falco/cloudproject_rules.yaml`](infra/falco/cloudproject_rules.yaml).
-The cloud-first path currently accepts clean Python and Bash submissions. PowerShell remains blocked
+The EKS path currently accepts clean Python and Bash submissions. PowerShell remains blocked
 pending a safe way to separate runtime startup events from script behavior. Falco log delivery has also
 caused intermittent clean-run HTTP 503 failures during live testing; treat those as infrastructure
 failures, not unsafe-script verdicts.
@@ -341,10 +344,10 @@ failures, not unsafe-script verdicts.
 
 | Area | Limitation & Workaround |
 | :--- | :--- |
-| **PowerShell in Cloud Mode** | Blocked under EKS by Falco DaemonSet because `pwsh` engine startup generates file and network syscall events that trigger benign security alerts. Python and Bash run cleanly. Works in local dev mode (`EKS_ENABLED=false`). |
+| **PowerShell in Cloud Mode** | Blocked under EKS by Falco DaemonSet because `pwsh` engine startup generates file and network syscall events that trigger benign security alerts. Python and Bash run cleanly. `EKS_ENABLED=false` rejects dry-run submissions. |
 | **Intermittent Cloud HTTP 503** | Falco log retrieval over Kubernetes API can occasionally experience timing latency where the gateway does not observe `CP Sandbox Observed` within the settle deadline, failing closed with HTTP 503. This is an infrastructure polling latency, not a malicious code detection. Retry the submission. |
-| **Local Sandbox Unit Tests** | 6 tests in `src/tests/test_sandbox.py` require a running local Docker Desktop with Linux containers. When Docker is not active, these 6 tests fail with pipe connection errors. All 154 other unit and integration tests pass without Docker. |
-| **Live Falco Client Tests** | `test_falco_real_client.py` and `test_kube_logs.py` require authorized EKS credentials and cluster API access. |
+| **Local Sandbox Unit Tests** | 6 tests in `src/tests/test_sandbox.py` require a running local Docker Desktop with Linux containers. When Docker is not active, these 6 tests fail with pipe connection errors. Run the `not docker` test command above when Docker is stopped. |
+| **Live Falco Client Tests** | `test_falco_real_client.py` and `test_kube_logs.py` use local loopback test servers; they do not require EKS credentials. |
 
 ---
 
@@ -369,7 +372,7 @@ relay/
 │   ├── resource_manager/ # Atomic slot reservation & local concurrency controller
 │   ├── sandbox/          # EKS Job runner, Falco syscall log monitor, and local Docker sandbox
 │   ├── sender/           # Signed payload generator CLI and centralized monitor inbox (:9000)
-│   ├── tests/            # Comprehensive 160-case pytest suite (unit, integration, adversarial)
+│   ├── tests/            # Pytest suite (unit, integration, adversarial)
 │   └── watchdog/         # Canonical HMAC-SHA256 signing, verification, and TTL NonceStore
 ├── env.example           # Environment variable template with placeholders
 ├── pytest.ini            # Test runner configuration
@@ -377,3 +380,8 @@ relay/
 ├── requirements.txt      # Production runtime dependencies
 └── run_all.py            # Automated gateway boot and test suite execution script
 ```
+
+## Demo and verification records
+
+See the [demo runbook](docs/demo-runbook.md) for a recording sequence and
+[review record](docs/project-review-2026-11-12.md) for the latest checks and remaining gaps.

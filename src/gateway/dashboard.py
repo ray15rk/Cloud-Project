@@ -43,11 +43,11 @@ EXAMPLES = {
 
     "memory_hog_sh": ("memory_hog.sh", "Bash: Memory exhaustion", "The sandbox terminates excessive memory allocation."),
 
-    "network_breach_sh": ("network_breach.sh", "Bash: Network breach probe", "Probes outbound socket blocking (--network none)."),
+    "network_breach_sh": ("network_breach.sh", "Bash: Network breach probe", "Probes outbound network restrictions and Falco detection."),
 
-    "filesystem_breakout_sh": ("filesystem_breakout.sh", "Bash: Filesystem breakout", "Probes read-only disk protection (--read-only)."),
+    "filesystem_breakout_sh": ("filesystem_breakout.sh", "Bash: Filesystem breakout", "Probes the EKS read-only filesystem and Falco detection."),
 
-    "good_ps": ("good.ps1", "PowerShell: Healthy update", "A PowerShell task script that should be delivered."),
+    "good_ps": ("good.ps1", "PowerShell: Healthy update", "Currently blocked by Falco findings from PowerShell startup."),
 
 }
 

@@ -1,10 +1,12 @@
 # EKS deployment
 
 Region: `ap-southeast-2`. Cluster: `cloudproject-sandbox-sydney`.
-The cluster runs Kubernetes 1.36 in Rance's personal AWS account. Its public
-API endpoint is limited to the operator's current public IP; private endpoint
-access is also enabled. Do not commit AWS credentials, secrets, or the current
-public IP.
+The cluster runs Kubernetes 1.36 in AWS account `562358727339`, which is
+subject to AWS Organizations access controls. Its public API endpoint is
+restricted by an IP allowlist; private endpoint access is also enabled. New
+teammates need a [project invitation](../../docs/aws-setup.md)
+before they can use the live cluster. Do not commit AWS credentials, secrets,
+or public IP addresses.
 
 ## Deployed resources
 

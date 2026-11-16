@@ -108,7 +108,8 @@ kubectl --context cloudproject-sandbox-sydney apply -f infra/falco/falco-namespa
 ```
 
 **4. Install Falco.** The chart version is pinned because `values.yaml` was checked against 9.2.x. If
-Helm cannot find it, run `helm search repo falcosecurity/falco --versions` and take the nearest 9.2.x.
+Helm cannot find it, check the chart repository and validate any replacement version
+against the values and rules before deployment.
 
 ```
 helm repo add falcosecurity https://falcosecurity.github.io/charts
@@ -133,9 +134,10 @@ error in the log and the pod restarts; see Troubleshooting.
 kubectl --context cloudproject-sandbox-sydney apply -f infra/falco/gateway-falco-rbac.yaml
 ```
 
+These are operator installation steps, not required for every teammate.
 The binding is for the group `cloudproject-gateway`, like `infra/k8s/gateway-rbac.yaml`. If your kubeconfig
-identity is the cluster creator it may already have this access, but apply it anyway so the gateway also
-works with a least-privilege identity.
+identity is the cluster creator it may already have this access, but the binding alone does not grant an IAM identity group membership.
+Configure the corresponding EKS access entry and verify its permissions.
 
 **7. Turn it on in `.env`** (see `env.example` for all keys)
 
@@ -155,7 +157,7 @@ python -m scripts.check_falco
 
 It runs eight small scripts as real EKS Jobs, one at a time. Each waits for a Job to start and run, then a few
 seconds for alerts, so allow tens of seconds per canary; the first can be slower while an image pulls or a
-node starts. EKS timings have not been measured yet, so treat that as a rough guide. Every canary exits 0.
+node starts. Startup varies with image caching and node availability; past samples are not a latency guarantee. Every canary exits 0.
 
 | Canary | Expected status | Expected behaviour |
 |---|---|---|
@@ -202,7 +204,7 @@ settings detection depends on.
   may write under its home directory and start helper processes, which will show up as findings until you
   allow them or give it a writable scratch volume.
 - **Wait times.** `FALCO_SETTLE_SECONDS` (default 3) is how long the gateway waits after the Job ends and
-  again after the first observed marker for late alerts. `FALCO_WAIT_SECONDS` (default 120) is how long it
+  again after the first observed marker for late alerts. `FALCO_WAIT_SECONDS` (code default 120; `env.example` sets 20) is how long it
   waits for the "observed" alert.
   The log query includes at least 120 seconds because a shorter EKS log window excluded fresh alerts.
 

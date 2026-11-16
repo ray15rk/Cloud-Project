@@ -1,0 +1,217 @@
+{
+  "date": "2026-11-12",
+  "timezone": "Asia/Singapore",
+  "scope": "Live EKS/Falco canaries and NGINX-to-gateway-to-EKS-to-local-endpoint regression checks; default deployed configuration, sequential submissions",
+  "canaries": [
+    {
+      "name": "benign",
+      "ok": true,
+      "required": true,
+      "status": "OK",
+      "expected": "OK",
+      "behaviours": [],
+      "expected_behaviour": null,
+      "observed": true,
+      "detail": "",
+      "monitor_ms": 4147.63,
+      "seconds": 11.2
+    },
+    {
+      "name": "network_swallowed",
+      "ok": true,
+      "required": true,
+      "status": "threat_detected",
+      "expected": "threat_detected",
+      "behaviours": [
+        "network"
+      ],
+      "expected_behaviour": "network",
+      "observed": true,
+      "detail": "behavioural threat detected by Falco: CP Sandbox Network Socket; CP Sandbox Network Connect",
+      "monitor_ms": 467.67,
+      "seconds": 9.8
+    },
+    {
+      "name": "exec_child",
+      "ok": true,
+      "required": true,
+      "status": "threat_detected",
+      "expected": "threat_detected",
+      "behaviours": [
+        "process"
+      ],
+      "expected_behaviour": "process",
+      "observed": true,
+      "detail": "behavioural threat detected by Falco: CP Sandbox Unexpected Program",
+      "monitor_ms": 467.27,
+      "seconds": 7.5
+    },
+    {
+      "name": "fs_write_swallowed",
+      "ok": true,
+      "required": true,
+      "status": "threat_detected",
+      "expected": "threat_detected",
+      "behaviours": [
+        "filesystem"
+      ],
+      "expected_behaviour": "filesystem",
+      "observed": true,
+      "detail": "behavioural threat detected by Falco: CP Sandbox File Write Attempt",
+      "monitor_ms": 449.73,
+      "seconds": 7.4
+    },
+    {
+      "name": "credential_probe",
+      "ok": true,
+      "required": true,
+      "status": "threat_detected",
+      "expected": "threat_detected",
+      "behaviours": [
+        "credentials"
+      ],
+      "expected_behaviour": "credentials",
+      "observed": true,
+      "detail": "behavioural threat detected by Falco: CP Sandbox Sensitive Path Access",
+      "monitor_ms": 454.82,
+      "seconds": 7.4
+    },
+    {
+      "name": "privileged_syscall",
+      "ok": true,
+      "required": false,
+      "status": "threat_detected",
+      "expected": "threat_detected",
+      "behaviours": [
+        "privilege"
+      ],
+      "expected_behaviour": "privilege",
+      "observed": true,
+      "detail": "behavioural threat detected by Falco: CP Sandbox Privileged Syscall",
+      "monitor_ms": 476.79,
+      "seconds": 7.5
+    },
+    {
+      "name": "benign_bash",
+      "ok": true,
+      "required": false,
+      "status": "OK",
+      "expected": "OK",
+      "behaviours": [],
+      "expected_behaviour": null,
+      "observed": true,
+      "detail": "",
+      "monitor_ms": 4782.77,
+      "seconds": 11.8
+    },
+    {
+      "name": "benign_powershell",
+      "ok": false,
+      "required": false,
+      "status": "threat_detected",
+      "expected": "OK",
+      "behaviours": [
+        "filesystem",
+        "network"
+      ],
+      "expected_behaviour": null,
+      "observed": true,
+      "detail": "behavioural threat detected by Falco: CP Sandbox File Write Attempt; CP Sandbox Network Socket",
+      "monitor_ms": 451.54,
+      "seconds": 9.7
+    }
+  ],
+  "pipeline": [
+    {
+      "name": "clean_python",
+      "initial_http": 202,
+      "poll_http": 200,
+      "final_status": 200,
+      "expected": 200,
+      "ok": true,
+      "seconds": 12.08,
+      "delivered": true,
+      "execution_location": "eks",
+      "reason": null,
+      "replay_http": null
+    },
+    {
+      "name": "clean_bash",
+      "initial_http": 202,
+      "poll_http": 200,
+      "final_status": 200,
+      "expected": 200,
+      "ok": true,
+      "seconds": 14.08,
+      "delivered": true,
+      "execution_location": "eks",
+      "reason": null,
+      "replay_http": null
+    },
+    {
+      "name": "network",
+      "initial_http": 202,
+      "poll_http": 200,
+      "final_status": 422,
+      "expected": 422,
+      "ok": true,
+      "seconds": 12.06,
+      "delivered": false,
+      "execution_location": "eks",
+      "reason": "threat_detected: behavioural threat detected by Falco: CP Sandbox Network Socket; CP Sandbox Network Connect",
+      "replay_http": null
+    },
+    {
+      "name": "timeout",
+      "initial_http": 202,
+      "poll_http": 200,
+      "final_status": 422,
+      "expected": 422,
+      "ok": true,
+      "seconds": 24.13,
+      "delivered": false,
+      "execution_location": "eks",
+      "reason": "timeout: Script exceeded its 10-second execution deadline",
+      "replay_http": null
+    },
+    {
+      "name": "memory",
+      "initial_http": 202,
+      "poll_http": 200,
+      "final_status": 422,
+      "expected": 422,
+      "ok": true,
+      "seconds": 12.07,
+      "delivered": false,
+      "execution_location": "eks",
+      "reason": "oom_killed: EKS Pod exceeded its 128Mi memory limit",
+      "replay_http": null
+    },
+    {
+      "name": "tamper",
+      "initial_http": 401,
+      "poll_http": 401,
+      "final_status": 401,
+      "expected": 401,
+      "ok": true,
+      "seconds": 0.01,
+      "delivered": false,
+      "execution_location": null,
+      "reason": "HMAC Verification Failed",
+      "replay_http": null
+    },
+    {
+      "name": "replay",
+      "initial_http": 202,
+      "poll_http": 200,
+      "final_status": 200,
+      "expected": 200,
+      "ok": true,
+      "seconds": 14.09,
+      "delivered": true,
+      "execution_location": "eks",
+      "reason": null,
+      "replay_http": 401
+    }
+  ]
+}
