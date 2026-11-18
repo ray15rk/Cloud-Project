@@ -6,7 +6,7 @@ A multi-tier, defense-in-depth distributed framework for safely pushing and exec
 
 > [!NOTE]
 > **Evaluation & Cloud Access Notice:**  
-> * **Offline Testing:** The core pipeline and automated test suite (`pytest src/tests -v -m "not docker"`) run completely offline on any machine without requiring AWS credentials or Docker.
+> * **Offline Testing:** The core pipeline and automated test suite (`pytest src/tests -v`) run completely offline on any machine without requiring AWS credentials or Docker.
 > * **Live Cloud Tier:** Cloud sandboxing executes on a dedicated, 24/7 AWS EKS cluster in Sydney (`ap-southeast-2`). To test the live cloud dashboard or submit live EKS jobs, evaluators and teammates require an email invitation from the project owner via AWS Builder ID (see [Section 1.4](#section-14-eks-access)).
 
 ---
@@ -177,9 +177,9 @@ The dashboard provides a focused 3-view navigation bar in the sidebar:
 
 ### How to Test in the Dashboard:
 1. **Load Sample Scripts:** Use the **Load sample** dropdown to select presets across all 3 languages (9 samples total):
-   * **Python:** `good.py` (Healthy), `infinite_loop.py` (Timeout), `memory_hog.py` (OOM kill).
-   * **Bash:** `good.sh` (Healthy diagnostic), `infinite_loop.sh` (Timeout), `memory_hog.sh` (OOM kill), `network_breach.sh` (Outbound network probe), `filesystem_breakout.sh` (Read-only filesystem probe).
-   * **PowerShell:** `good.ps1` (currently blocked by Falco startup findings).
+   * **Python:** `Python: Healthy update` (`good.py`), `Python: Infinite loop` (`infinite_loop.py`), `Python: Memory exhaustion` (`memory_hog.py`).
+   * **Bash:** `Bash: Healthy update` (`good.sh`), `Bash: Infinite loop` (`infinite_loop.sh`), `Bash: Memory exhaustion` (`memory_hog.sh`), `Bash: Network breach probe` (`network_breach.sh`), `Bash: Filesystem breakout` (`filesystem_breakout.sh`).
+   * **PowerShell:** `PowerShell: Healthy update` (`good.ps1` — currently blocked by Falco startup findings).
    *(Notice that the language badge in the top right automatically updates to **Python 3.11**, **Bash**, or **PowerShell**).*
 2. **Upload Your Own Scripts:** Click **Upload script** or drag-and-drop any `.py`, `.sh`, or `.ps1` file into the editor.
 3. **Select a Submission Mode:**
@@ -215,7 +215,7 @@ The dashboard includes three automated defense checks directly on the Workbench 
 
 Relay supports heterogeneous edge workloads: **Bash / Shell scripts (`.sh`)** for hardware and OS diagnostics, **Python scripts (`.py`)** for telemetry processing and data analysis, and **PowerShell scripts (`.ps1`)** for administrative tasks.
 
-### 3.1 Supported Language Runtimes (`LANG_CONFIG`)
+### 3.1 Supported Language Runtimes
 
 | Runtime | Key | Extension | Internal Container Command | Edge Fleet Use Case |
 | :--- | :--- | :--- | :--- | :--- |
@@ -291,19 +291,13 @@ python -m pytest src/tests/test_dashboard.py -v
 ```
 * **Coverage:** Secret key leak prevention (HTML/JS assets never expose `SHARED_SECRET`), token authentication on `/api/run` and `/api/capacity-test`, loopback origin enforcement, pipeline replay and tamper protection, strict form validation, missing secret graceful degradation, and health endpoint cache/mutex safety.
 
-#### 2. Core Test Suite (151 tests, No Docker required):
-Skips the legacy local Docker container tests and runs all unit tests, crypto verifiers, and cloud queue logic:
+#### 2. Complete Automated Test Suite (151 tests — Offline, No AWS or Docker required):
+Runs all unit tests, cryptographic verifiers, Falco rules/monitor checks, NGINX config assertions, and cloud queue logic:
 ```powershell
-python -m pytest src/tests -v -m "not docker" -p no:cacheprovider
-```
-
-#### 3. Complete Test Suite (160 tests, Docker Desktop active):
-```bash
-docker build -t cloudproject-sandbox:dev docker/sandbox
 python -m pytest src/tests -v -p no:cacheprovider
 ```
 
-#### Test Suite Module Breakdown (160 Tests Total):
+#### Test Suite Module Breakdown (151 Tests Total):
 | Test Module | Tests | Layer Tested | Validation Goal |
 | :--- | :--- | :--- | :--- |
 | `test_falco_monitor.py` | 34 | Syscall Behaviour Monitor | Alert parsing, fail-closed logic, flood handling, verdict classification |
@@ -313,7 +307,6 @@ python -m pytest src/tests -v -p no:cacheprovider
 | `test_watchdog.py` | 11 | Cryptographic Watchdog | HMAC-SHA256 integrity, freshness, replay prevention, language binding |
 | `test_gateway.py` | 10 | Ingress & Dispatcher | Pipeline verify → EKS → Falco → deliver, fail-closed paths |
 | `test_kube_logs.py` | 10 | Kubernetes Log Reader | Raw log retrieval over local loopback server (no cluster required) |
-| `test_sandbox.py` | 9 | Local Container Isolation | Legacy Docker sandbox helper (`@pytest.mark.docker`; requires Docker Desktop) |
 | `test_falco_real_client.py` | 8 | Falco API Client | Real Kubernetes client against local loopback mock server (no cluster required) |
 | `test_nginx_conf.py` | 7 | NGINX Configuration | Path whitelist, 429 rate-limit code, 256 KiB cap, timeout, no-retry |
 | `test_ingress.py` | 6 | Perimeter & Monitor | Sender error handling, no-retry, NGINX log aggregation & rotation |
@@ -364,7 +357,6 @@ Rules and policy lists: [`infra/falco/cloudproject_rules.yaml`](infra/falco/clou
 | :--- | :--- |
 | **PowerShell in Cloud Mode** | Blocked under EKS by Falco DaemonSet because `pwsh` engine startup generates file and network syscall events that trigger benign security alerts. Python and Bash run cleanly. `EKS_ENABLED=false` rejects dry-run submissions. |
 | **Intermittent Cloud HTTP 503** | Falco log retrieval over Kubernetes API can occasionally experience timing latency where the gateway does not observe `CP Sandbox Observed` within the settle deadline, failing closed with HTTP 503. This is an infrastructure polling latency, not a malicious code detection. Retry the submission. |
-| **Local Sandbox Unit Tests** | All 9 tests in `src/tests/test_sandbox.py` are marked `@pytest.mark.docker` and require a running local Docker Desktop with Linux containers (without Docker and without `-m "not docker"`, 6 fail immediately with daemon connection errors). Run the `-m "not docker"` test command above when Docker is stopped. |
 | **Live Falco Client Tests** | `test_falco_real_client.py` and `test_kube_logs.py` use local loopback test servers; they do not require EKS credentials. |
 
 ---
@@ -373,7 +365,7 @@ Rules and policy lists: [`infra/falco/cloudproject_rules.yaml`](infra/falco/clou
 
 ```
 relay/
-├── docker/sandbox/       # Container Dockerfile & entrypoint runner for polyglot sandboxing
+├── docker/sandbox/       # Container Dockerfile & entrypoint runner for the EKS sandbox image
 ├── docs/                 # Operational guides: AWS EKS, Windows/Linux teammate setup, Falco setup, NGINX
 ├── infra/
 │   ├── eks/              # IAM & node autoscaler policies, cluster launch configuration
@@ -387,13 +379,14 @@ relay/
 │   ├── endpoint/         # Mock edge endpoint application (:5000/execute)
 │   ├── examples/         # Symmetrical sample scripts (Python, Bash, PowerShell; healthy & adversarial)
 │   ├── gateway/          # Flask gateway, HMAC verification, SQLite cloud queue, and live UI
-│   ├── resource_manager/ # Atomic slot reservation & local concurrency controller
-│   ├── sandbox/          # EKS Job runner, Falco syscall log monitor, and local Docker sandbox
+│   ├── resource_manager/ # Atomic slot reservation & concurrency controller
+│   ├── sandbox/          # EKS Job runner, Falco syscall log monitor, and Kubernetes log reader
 │   ├── sender/           # Signed payload generator CLI and centralized monitor inbox (:9000)
-│   ├── tests/            # Pytest suite (unit, integration, adversarial)
+│   ├── tests/            # Pytest suite (17 modules, 151 tests — unit, integration, adversarial)
 │   └── watchdog/         # Canonical HMAC-SHA256 signing, verification, and TTL NonceStore
+├── .gitattributes        # Enforces Unix LF line endings on shell scripts (.sh)
+├── changelog.md          # Project milestone and engineering changelog
 ├── env.example           # Environment variable template with placeholders
-├── pytest.ini            # Test runner configuration
 ├── readme.md             # Authoritative project documentation & execution guide
 └── requirements.txt      # Production runtime dependencies
 ```

@@ -27,7 +27,7 @@
   items: [cloudproject-sandbox]
 
 # Programs a payload is allowed to start. These are the interpreters the sandbox runs
-# (see LANG_CONFIG in src/sandbox/sandbox.py). Anything else a script executes is reported.
+# (see src/sandbox/eks_runner.py). Anything else a script executes is reported.
 - list: cp_allowed_programs
   items: [python, python3, python3.11, bash, pwsh]
 

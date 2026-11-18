@@ -1,0 +1,2 @@
+# Always check out shell scripts with Unix LF line endings so Linux EKS Bash never hits CRLF syntax errors
+*.sh text eol=lf

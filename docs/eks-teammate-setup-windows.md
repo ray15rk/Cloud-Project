@@ -30,7 +30,7 @@ if (-not (Test-Path .env)) { Copy-Item env.example .env }
 To check the code locally without AWS or Docker:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest src/tests -v -m "not docker" -p no:cacheprovider
+.\.venv\Scripts\python.exe -m pytest src/tests -v -p no:cacheprovider
 ```
 
 This exercises the mocked EKS path; it does not submit a live dry run.

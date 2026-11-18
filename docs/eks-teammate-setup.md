@@ -30,7 +30,7 @@ test -f .env || cp env.example .env
 To check the code locally without AWS or Docker:
 
 ```sh
-.venv/bin/python -m pytest src/tests -v -m "not docker" -p no:cacheprovider
+.venv/bin/python -m pytest src/tests -v -p no:cacheprovider
 ```
 
 This exercises the mocked EKS path; it does not submit a live dry run.

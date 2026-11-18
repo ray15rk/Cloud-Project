@@ -188,7 +188,7 @@ a **Behaviour monitor** row in its health panel.
 ## Running the unit tests
 
 ```
-python -m pytest src/tests -m "not docker" -q
+python -m pytest src/tests -q
 ```
 
 These use fake Kubernetes and realistic Falco JSON, so they need no cluster. They check the parsing, the
