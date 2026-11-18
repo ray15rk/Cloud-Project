@@ -1,5 +1,7 @@
 # Secure Dynamic Payload Delivery Pipeline (Relay)
 
+**Team 22 | Cloud & Distributed Computing**
+
 A multi-tier, defense-in-depth distributed framework for safely pushing and executing untrusted mobile code on edge devices. Supports polyglot payloads (**Python**, **Bash / Shell scripts**, and **PowerShell**). Payloads undergo constant-time HMAC-SHA256 verification, EKS dry-run sandboxing, and delivery to target endpoints only after passing all checks.
 
 > [!NOTE]
@@ -127,6 +129,8 @@ Ensure your local `.env` has the verified settings pointing to your generated ku
 # Core pipeline configuration
 SHARED_SECRET=<your_generated_32_byte_hex_secret>
 GATEWAY_URL=http://127.0.0.1:8000/submit
+ENDPOINT_URL=http://127.0.0.1:5000/execute
+NOTIFY_URL=http://127.0.0.1:9000/notify
 
 # Cloud dry-run sandboxing (EKS + Falco)
 EKS_ENABLED=true
@@ -134,8 +138,7 @@ FALCO_ENABLED=true
 AWS_PROFILE=cloudproject-sydney
 AWS_REGION=ap-southeast-2
 KUBECONFIG=C:\Users\<username>\.kube\config-cloudproject-sydney   # Absolute path on your device
-EKS_CLUSTER_NAME=cloudproject-sandbox-sydney
-EKS_NAMESPACE=cloudproject-sandbox
+EKS_CONTEXT=cloudproject-sandbox-sydney
 EKS_IMAGE=562358727339.dkr.ecr.ap-southeast-2.amazonaws.com/cloudproject-sandbox@sha256:a2a31397c0f6a17856138c71ad14300b1e592ccc46e3ee0f61d7167911c5bffa
 ```
 
@@ -173,9 +176,9 @@ The dashboard provides a focused 3-view navigation bar in the sidebar:
 3. **System status:** Real-time health monitor displaying local perimeter service statuses (Gateway, Endpoint, Central Monitor), AWS EKS cluster connectivity, and the Falco behavioral monitor, alongside a 2×2 cluster performance telemetry grid (Submission Throughput, Queue Capacity & Admission, Average Stage Latencies, and Failure Isolation).
 
 ### How to Test in the Dashboard:
-1. **Load Sample Scripts:** Use the **Load sample** dropdown to select presets across all 3 languages:
+1. **Load Sample Scripts:** Use the **Load sample** dropdown to select presets across all 3 languages (9 samples total):
    * **Python:** `good.py` (Healthy), `infinite_loop.py` (Timeout), `memory_hog.py` (OOM kill).
-   * **Bash:** `good.sh` (Healthy diagnostic), `infinite_loop.sh` (Timeout), `memory_hog.sh` (OOM kill).
+   * **Bash:** `good.sh` (Healthy diagnostic), `infinite_loop.sh` (Timeout), `memory_hog.sh` (OOM kill), `network_breach.sh` (Outbound network probe), `filesystem_breakout.sh` (Read-only filesystem probe).
    * **PowerShell:** `good.ps1` (currently blocked by Falco startup findings).
    *(Notice that the language badge in the top right automatically updates to **Python 3.11**, **Bash**, or **PowerShell**).*
 2. **Upload Your Own Scripts:** Click **Upload script** or drag-and-drop any `.py`, `.sh`, or `.ps1` file into the editor.
@@ -286,7 +289,7 @@ Runs in ~4 seconds and verifies the web gateway, token isolation, and pipeline d
 ```powershell
 python -m pytest src/tests/test_dashboard.py -v
 ```
-* **Coverage:** Secret key leak prevention (HTML/JS assets never expose `SHARED_SECRET`), token authentication on `/api/sign`, loopback origin enforcement, pipeline replay and tamper protection, strict form validation, missing secret graceful degradation, and health endpoint cache/mutex safety.
+* **Coverage:** Secret key leak prevention (HTML/JS assets never expose `SHARED_SECRET`), token authentication on `/api/run` and `/api/capacity-test`, loopback origin enforcement, pipeline replay and tamper protection, strict form validation, missing secret graceful degradation, and health endpoint cache/mutex safety.
 
 #### 2. Core Test Suite (151 tests, No Docker required):
 Skips the legacy local Docker container tests and runs all unit tests, crypto verifiers, and cloud queue logic:
@@ -300,18 +303,27 @@ docker build -t cloudproject-sandbox:dev docker/sandbox
 python -m pytest src/tests -v -p no:cacheprovider
 ```
 
-#### Test Suite Module Breakdown:
+#### Test Suite Module Breakdown (160 Tests Total):
 | Test Module | Tests | Layer Tested | Validation Goal |
 | :--- | :--- | :--- | :--- |
+| `test_falco_monitor.py` | 34 | Syscall Behaviour Monitor | Alert parsing, fail-closed logic, flood handling, verdict classification |
+| `test_falco_rules.py` | 15 | Falco Ruleset | Rule YAML structure and behaviour class coverage |
 | `test_dashboard.py` | 13 | Web UI & API Gateway | Token validation, asset security, form bounds, health caching |
-| `test_gateway.py` | 15 | Ingress & Dispatcher | HMAC authentication, nonce tracking, admission control |
-| `test_watchdog.py` | 12 | Cryptographic Watchdog | HMAC-SHA256 signature verification, timing attack resistance |
-| `test_cloud_submissions.py` | 8 | Cloud Queue & Store | SQLite queue limits, atomic claims, worker leases, heartbeats |
-| `test_eks_runner_manifest.py`| 10 | Kubernetes Sandbox | Job YAML rendering, seccomp profiles, read-only rootfs, quotas |
-| `test_endpoint.py` | 8 | Edge Execution Host | Local script execution on loopback (:5000) |
-| `test_falco_runner.py` | 14 | Sycall Behaviour Monitor | Rule matching, finding prioritization, verdict classification |
-| `test_ingress.py` | 8 | Perimeter Guardrails | 64 KiB payload limits, timeout guards, response serialization |
-| `test_sandbox.py` | 9 | Local Container Isolation | Docker sandbox resource bounding (requires Docker Desktop) |
+| `test_falco_runner.py` | 12 | EKS + Falco Integration | Runner + Falco end-to-end verdict mapping (mocked Kubernetes) |
+| `test_watchdog.py` | 11 | Cryptographic Watchdog | HMAC-SHA256 integrity, freshness, replay prevention, language binding |
+| `test_gateway.py` | 10 | Ingress & Dispatcher | Pipeline verify → EKS → Falco → deliver, fail-closed paths |
+| `test_kube_logs.py` | 10 | Kubernetes Log Reader | Raw log retrieval over local loopback server (no cluster required) |
+| `test_sandbox.py` | 9 | Local Container Isolation | Legacy Docker sandbox helper (`@pytest.mark.docker`; requires Docker Desktop) |
+| `test_falco_real_client.py` | 8 | Falco API Client | Real Kubernetes client against local loopback mock server (no cluster required) |
+| `test_nginx_conf.py` | 7 | NGINX Configuration | Path whitelist, 429 rate-limit code, 256 KiB cap, timeout, no-retry |
+| `test_ingress.py` | 6 | Perimeter & Monitor | Sender error handling, no-retry, NGINX log aggregation & rotation |
+| `test_serve.py` | 6 | WSGI Server Config | Thread/slot validation and dashboard toggle |
+| `test_cloud_submissions.py` | 4 | Cloud Queue & Store | SQLite queue cap, atomic claims, worker lease recovery |
+| `test_eks_runner_manifest.py` | 4 | Kubernetes Sandbox | Job YAML rendering, runtime args, kubeconfig token retry |
+| `test_resource_manager.py` | 4 | Concurrency Controller | Atomic admission, memory budget tracking, slot release |
+| `test_endpoint.py` | 3 | Edge Execution Host | Local script execution, UTF-8 output, failure cleanup |
+| `test_sandbox_job_template.py` | 3 | Job Template Manifest | Explicit command/args and Dockerfile entrypoint checks |
+| `test_no_conflict_markers.py` | 1 | Repository Hygiene | Verifies no unresolved Git merge conflict markers |
 
 ---
 
@@ -352,7 +364,7 @@ Rules and policy lists: [`infra/falco/cloudproject_rules.yaml`](infra/falco/clou
 | :--- | :--- |
 | **PowerShell in Cloud Mode** | Blocked under EKS by Falco DaemonSet because `pwsh` engine startup generates file and network syscall events that trigger benign security alerts. Python and Bash run cleanly. `EKS_ENABLED=false` rejects dry-run submissions. |
 | **Intermittent Cloud HTTP 503** | Falco log retrieval over Kubernetes API can occasionally experience timing latency where the gateway does not observe `CP Sandbox Observed` within the settle deadline, failing closed with HTTP 503. This is an infrastructure polling latency, not a malicious code detection. Retry the submission. |
-| **Local Sandbox Unit Tests** | 6 tests in `src/tests/test_sandbox.py` require a running local Docker Desktop with Linux containers. When Docker is not active, these 6 tests fail with pipe connection errors. Run the `not docker` test command above when Docker is stopped. |
+| **Local Sandbox Unit Tests** | All 9 tests in `src/tests/test_sandbox.py` are marked `@pytest.mark.docker` and require a running local Docker Desktop with Linux containers (without Docker and without `-m "not docker"`, 6 fail immediately with daemon connection errors). Run the `-m "not docker"` test command above when Docker is stopped. |
 | **Live Falco Client Tests** | `test_falco_real_client.py` and `test_kube_logs.py` use local loopback test servers; they do not require EKS credentials. |
 
 ---
@@ -368,7 +380,7 @@ relay/
 │   ├── falco/            # DaemonSet values, Kubernetes RBAC, and cloudproject_rules.yaml
 │   └── k8s/              # Disposable sandbox Job template, namespace quota, NetworkPolicies
 ├── nginx/                # Ingress reverse proxy configuration (rate limiting, timeouts, body cap)
-├── scripts/              # Health-check diagnostic scripts & PDF generator
+├── scripts/              # Health-check, Falco canary, and queue reset utilities
 ├── src/
 │   ├── dashboard.py      # Integrated 3-in-1 server runner (Gateway + Endpoint + Monitor)
 │   ├── ingress.py        # System-wide configuration timeouts and constants
@@ -381,7 +393,6 @@ relay/
 │   ├── tests/            # Pytest suite (unit, integration, adversarial)
 │   └── watchdog/         # Canonical HMAC-SHA256 signing, verification, and TTL NonceStore
 ├── env.example           # Environment variable template with placeholders
-├── instructions.pdf      # Compiled operational and testing instructions manual
 ├── pytest.ini            # Test runner configuration
 ├── readme.md             # Authoritative project documentation & execution guide
 └── requirements.txt      # Production runtime dependencies

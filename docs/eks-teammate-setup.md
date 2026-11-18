@@ -56,7 +56,7 @@ aws --version
 aws login --profile cloudproject-sydney
 ```
 
-If prompted for a Region, enter `ap-southeast-2`. Choose the invited project
+If prompted for a Region, enter `ap-southeast-2`. If the browser displays a legacy "IAM user sign in" page, click **"Change to new experience"** in the top-right banner (or log in directly at [settings.aws.com/projects](https://settings.aws.com/projects) first) to reveal the AWS Builder ID sign-in option. Choose the invited project (`cloudproject-sandbox-sydney`, account `562358727339`)
 in the browser. The profile name `cloudproject-sydney` is local to your
 device. Use it consistently in these commands:
 
